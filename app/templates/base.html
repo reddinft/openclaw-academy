@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}OpenClaw Academy{% endblock %}</title>
+    <link rel="stylesheet" href="/static/css/style.css">
+    <!-- Highlight.js for code syntax highlighting -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css">
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/yaml.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/languages/typescript.min.js"></script>
+    <!-- Mermaid for architecture diagrams -->
+    <script src="https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js"></script>
+    <!-- HTMX for interactivity -->
+    <script src="https://unpkg.com/htmx.org@2.0.4/dist/htmx.min.js"></script>
+</head>
+<body>
+    <nav class="topnav">
+        <div class="topnav-inner">
+            <a href="/" class="brand">
+                <span class="brand-emoji">🦞</span>
+                <span class="brand-name">OpenClaw Academy</span>
+            </a>
+            <div class="topnav-right">
+                <a href="/api/progress" class="nav-link" target="_blank">📊 Progress JSON</a>
+            </div>
+        </div>
+    </nav>
+
+    <div class="layout">
+        <!-- Sidebar -->
+        <aside class="sidebar">
+            <div class="sidebar-section">
+                <div class="sidebar-title">Modules</div>
+                {% if all_modules is defined %}
+                {% for m in all_modules %}
+                <div class="sidebar-module {% if module is defined and m.id == module.id %}active{% endif %}">
+                    <a href="/module/{{ m.id }}" class="sidebar-module-link">
+                        <span class="sidebar-icon">{{ m.icon | default('📚') }}</span>
+                        <span class="sidebar-module-name">{{ m.title }}</span>
+                        {% if m.progress_total > 0 %}
+                        <span class="sidebar-badge {% if m.progress_done == m.progress_total %}badge-done{% endif %}">
+                            {{ m.progress_done }}/{{ m.progress_total }}
+                        </span>
+                        {% endif %}
+                    </a>
+                </div>
+                {% endfor %}
+                {% endif %}
+            </div>
+        </aside>
+
+        <!-- Main content -->
+        <main class="main-content">
+            {% block content %}{% endblock %}
+        </main>
+    </div>
+
+    <script src="/static/js/app.js"></script>
+    <script>
+        // Initialize syntax highlighting
+        document.addEventListener('DOMContentLoaded', function() {
+            hljs.highlightAll();
+            mermaid.initialize({ 
+                startOnLoad: true, 
+                theme: 'dark',
+                themeVariables: {
+                    darkMode: true,
+                    background: '#1a1a2e',
+                    primaryColor: '#e94560',
+                    primaryTextColor: '#e0e0e0',
+                    lineColor: '#666',
+                }
+            });
+        });
+    </script>
+    {% block extra_scripts %}{% endblock %}
+</body>
+</html>

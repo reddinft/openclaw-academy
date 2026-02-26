@@ -1,0 +1,22 @@
+services:
+  openclaw-academy:
+    build: .
+    container_name: openclaw-academy
+    ports:
+      - "8080:8080"
+    volumes:
+      # Course content — bind mount so edits take effect immediately
+      - ./course:/course:ro
+      # SQLite progress DB — named volume for persistence
+      - academy-data:/data
+      # Hot-reload app code during development (remove in production)
+      - ./app:/app/app:ro
+    environment:
+      - COURSE_DIR=/course
+      - DATA_DIR=/data
+      - DB_PATH=/data/progress.db
+    restart: unless-stopped
+
+volumes:
+  academy-data:
+    driver: local

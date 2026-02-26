@@ -1,0 +1,23 @@
+id: module-07-config
+title: "Configuration Deep Dive"
+description: "Every major block of openclaw.json: model config, agent config, auth profiles, and the doctor tool."
+order: 7
+icon: "⚙️"
+quiz_file: quiz.yaml
+lessons:
+  - slug: config-structure
+    title: "Config Structure & Validation"
+    file: 01-config-structure.md
+    duration_min: 12
+  - slug: model-configuration
+    title: "Model Configuration"
+    file: 02-model-config.md
+    duration_min: 12
+  - slug: agent-configuration
+    title: "Agent Configuration"
+    file: 03-agent-config.md
+    duration_min: 12
+  - slug: auth-profiles
+    title: "Auth Profiles"
+    file: 04-auth-profiles.md
+    duration_min: 10

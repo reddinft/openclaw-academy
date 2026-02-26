@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}OpenClaw Academy — Home{% endblock %}
+
+{% block content %}
+<div class="hero">
+    <div class="hero-content">
+        <div class="hero-emoji">🦞</div>
+        <h1 class="hero-title">OpenClaw Academy</h1>
+        <p class="hero-subtitle">Deep-dive into OpenClaw's architecture, codebase, and internals.</p>
+        <p class="hero-desc">10 modules · {{ total_lessons }} lessons · A community educational resource for OpenClaw</p>
+
+        {% if total_lessons > 0 %}
+        <div class="overall-progress">
+            <div class="progress-label">
+                <span>Overall Progress</span>
+                <span class="progress-count">{{ total_done }}/{{ total_lessons }} lessons</span>
+            </div>
+            <div class="progress-bar-wrap">
+                <div class="progress-bar" style="width: {{ overall_pct }}%"></div>
+            </div>
+            <div class="progress-pct">{{ overall_pct }}%</div>
+        </div>
+        {% endif %}
+    </div>
+</div>
+
+<div class="module-grid">
+    {% for m in modules %}
+    <a href="/module/{{ m.id }}" class="module-card {% if m.progress_done == m.progress_total and m.progress_total > 0 %}module-card-complete{% endif %}">
+        <div class="module-card-icon">{{ m.icon | default('📚') }}</div>
+        <div class="module-card-body">
+            <div class="module-card-order">Module {{ m.order }}</div>
+            <h2 class="module-card-title">{{ m.title }}</h2>
+            <p class="module-card-desc">{{ m.description | truncate(120) }}</p>
+            <div class="module-card-footer">
+                <span class="module-lessons">{{ m.progress_total }} lessons</span>
+                <div class="module-progress-wrap">
+                    <div class="module-progress-bar" style="width: {{ m.progress_pct }}%"></div>
+                </div>
+                <span class="module-pct {% if m.progress_pct == 100 %}text-success{% endif %}">
+                    {% if m.progress_pct == 100 %}✅ Done{% else %}{{ m.progress_pct }}%{% endif %}
+                </span>
+            </div>
+        </div>
+    </a>
+    {% endfor %}
+</div>
+
+<div class="home-footer">
+    <p>🦞 <em>A community educational resource for OpenClaw. Start with Module 1 and work through in order.</em></p>
+</div>
+{% endblock %}

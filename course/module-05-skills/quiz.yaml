@@ -1,0 +1,14 @@
+id: mmodule-quiz
+title: "Module module Quiz"
+passing_score: 70
+questions:
+  - id: q1
+    text: "Quiz questions for this module are coming soon."
+    type: single_choice
+    options:
+      - id: a
+        text: "Coming soon"
+      - id: b
+        text: "Stay tuned"
+    correct: a
+    explanation: "This module's quiz is still being written. Check back after the lesson content is complete."

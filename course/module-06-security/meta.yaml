@@ -1,0 +1,19 @@
+id: module-06-security
+title: "Security Model"
+description: "Trust boundaries, prompt injection defenses, elevated mode, and sandboxing — keeping your Gateway safe."
+order: 6
+icon: "🔒"
+quiz_file: quiz.yaml
+lessons:
+  - slug: trust-hierarchy
+    title: "Trust Hierarchy"
+    file: 01-trust-hierarchy.md
+    duration_min: 12
+  - slug: prompt-injection-defenses
+    title: "Prompt Injection Defenses"
+    file: 02-prompt-injection.md
+    duration_min: 15
+  - slug: tool-policy-sandboxing
+    title: "Tool Policy & Sandboxing"
+    file: 03-sandboxing.md
+    duration_min: 12

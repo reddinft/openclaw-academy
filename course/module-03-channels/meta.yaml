@@ -1,0 +1,19 @@
+id: module-03-channels
+title: "Channel System"
+description: "How messaging platforms connect to OpenClaw and how messages flow in and out."
+order: 3
+icon: "📨"
+quiz_file: quiz.yaml
+lessons:
+  - slug: channel-plugin-architecture
+    title: "Channel Plugin Architecture"
+    file: 01-channel-plugin-architecture.md
+    duration_min: 12
+  - slug: telegram-and-whatsapp
+    title: "Telegram & WhatsApp"
+    file: 02-telegram-whatsapp.md
+    duration_min: 15
+  - slug: discord-slack-others
+    title: "Discord, Slack & Others"
+    file: 03-discord-slack-others.md
+    duration_min: 10

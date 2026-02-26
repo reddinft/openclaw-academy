@@ -1,0 +1,92 @@
+{% extends "base.html" %}
+{% block title %}Quiz: {{ module.title }} — OpenClaw Academy{% endblock %}
+
+{% block content %}
+<div class="quiz-header">
+    <div class="breadcrumbs">
+        <a href="/">All Modules</a>
+        <span class="sep">›</span>
+        <a href="/module/{{ module.id }}">{{ module.title }}</a>
+        <span class="sep">›</span>
+        <span>Quiz</span>
+    </div>
+    <h1 class="quiz-title">📝 {{ quiz.title }}</h1>
+    <p class="quiz-meta">{{ quiz.questions | length }} questions · Passing score: {{ quiz.passing_score | default(70) }}%</p>
+
+    {% if best %}
+    <div class="quiz-best {% if best.score * 100 // best.total >= (quiz.passing_score | default(70)) %}quiz-best-pass{% else %}quiz-best-fail{% endif %}">
+        Best score: {{ best.score }}/{{ best.total }}
+        ({{ (best.score * 100 // best.total) if best.total else 0 }}%)
+    </div>
+    {% endif %}
+</div>
+
+{% if submitted %}
+<!-- Results view -->
+<div class="quiz-results">
+    <div class="quiz-score {% if passing %}score-pass{% else %}score-fail{% endif %}">
+        <div class="quiz-score-number">{{ score_pct }}%</div>
+        <div class="quiz-score-label">
+            {% if passing %}🎉 Passed! ({{ correct }}/{{ total }} correct){% else %}❌ Not quite — {{ correct }}/{{ total }} correct{% endif %}
+        </div>
+    </div>
+
+    {% for r in results %}
+    <div class="quiz-result-item {% if r.is_correct %}result-correct{% else %}result-wrong{% endif %}">
+        <div class="result-question">
+            <span class="result-icon">{% if r.is_correct %}✅{% else %}❌{% endif %}</span>
+            <strong>Q{{ loop.index }}. {{ r.question.text }}</strong>
+        </div>
+        <div class="result-answers">
+            {% for opt in r.question.options %}
+            <div class="result-option 
+                {% if opt.id == r.question.correct %}option-correct{% endif %}
+                {% if opt.id == r.user_answer and not r.is_correct %}option-wrong{% endif %}
+            ">
+                <span class="option-marker">
+                    {% if opt.id == r.question.correct %}✓{% elif opt.id == r.user_answer %}✗{% else %}&nbsp;{% endif %}
+                </span>
+                {{ opt.text }}
+            </div>
+            {% endfor %}
+        </div>
+        {% if r.question.explanation %}
+        <div class="result-explanation">
+            💡 <em>{{ r.question.explanation }}</em>
+        </div>
+        {% endif %}
+    </div>
+    {% endfor %}
+
+    <div class="quiz-retry">
+        <a href="/module/{{ module.id }}/quiz" class="btn btn-outline">Try Again</a>
+        <a href="/module/{{ module.id }}" class="btn btn-primary">Back to Module</a>
+    </div>
+</div>
+
+{% else %}
+<!-- Quiz form -->
+<form method="POST" action="/module/{{ module_id }}/quiz" class="quiz-form">
+    {% for q in quiz.questions %}
+    <div class="quiz-question">
+        <div class="question-text">
+            <span class="question-num">{{ loop.index }}</span>
+            {{ q.text }}
+        </div>
+        <div class="question-options">
+            {% for opt in q.options %}
+            <label class="option-label">
+                <input type="radio" name="{{ q.id }}" value="{{ opt.id }}" required>
+                <span class="option-text">{{ opt.text }}</span>
+            </label>
+            {% endfor %}
+        </div>
+    </div>
+    {% endfor %}
+
+    <div class="quiz-submit">
+        <button type="submit" class="btn btn-primary btn-large">Submit Answers →</button>
+    </div>
+</form>
+{% endif %}
+{% endblock %}

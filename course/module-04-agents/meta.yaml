@@ -1,0 +1,23 @@
+id: module-04-agents
+title: "Agent System"
+description: "The AI runtime: LLM calls, tool execution, memory management, compaction, and multi-agent routing."
+order: 4
+icon: "🤖"
+quiz_file: quiz.yaml
+lessons:
+  - slug: agent-lifecycle
+    title: "Agent Lifecycle"
+    file: 01-agent-lifecycle.md
+    duration_min: 15
+  - slug: tool-system
+    title: "Tool System"
+    file: 02-tool-system.md
+    duration_min: 15
+  - slug: memory-and-compaction
+    title: "Memory & Compaction"
+    file: 03-memory-compaction.md
+    duration_min: 12
+  - slug: multi-agent-routing
+    title: "Multi-Agent Routing"
+    file: 04-multi-agent.md
+    duration_min: 10

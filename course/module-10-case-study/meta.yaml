@@ -1,0 +1,19 @@
+id: module-10-case-study
+title: "Case Study: Our Setup"
+description: "How we built on top of OpenClaw: our Mac Mini setup, custom skills, QMD memory backend, and lessons learned."
+order: 10
+icon: "🐱"
+quiz_file: quiz.yaml
+lessons:
+  - slug: our-architecture
+    title: "Our Architecture"
+    file: 01-our-architecture.md
+    duration_min: 15
+  - slug: our-skills-and-workflows
+    title: "Our Skills & Workflows"
+    file: 02-our-skills.md
+    duration_min: 15
+  - slug: lessons-learned
+    title: "Lessons Learned"
+    file: 03-lessons-learned.md
+    duration_min: 12

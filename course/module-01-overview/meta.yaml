@@ -1,0 +1,19 @@
+id: module-01-overview
+title: "OpenClaw Overview"
+description: "What OpenClaw is, how it works end-to-end, and how to think about the system as a whole."
+order: 1
+icon: "🦞"
+quiz_file: quiz.yaml
+lessons:
+  - slug: what-is-openclaw
+    title: "What is OpenClaw?"
+    file: 01-what-is-openclaw.md
+    duration_min: 10
+  - slug: architecture-overview
+    title: "Architecture Overview"
+    file: 02-architecture-overview.md
+    duration_min: 15
+  - slug: end-to-end-message-flow
+    title: "End-to-End Message Flow"
+    file: 03-end-to-end-flow.md
+    duration_min: 8

@@ -1,0 +1,55 @@
+{% extends "base.html" %}
+{% block title %}{{ module.title }} — OpenClaw Academy{% endblock %}
+
+{% block content %}
+<div class="module-header">
+    <a href="/" class="breadcrumb">← All Modules</a>
+    <div class="module-header-icon">{{ module.icon | default('📚') }}</div>
+    <div class="module-header-order">Module {{ module.order }}</div>
+    <h1 class="module-header-title">{{ module.title }}</h1>
+    <p class="module-header-desc">{{ module.description }}</p>
+    <div class="module-header-progress">
+        <div class="progress-label">
+            <span>Progress</span>
+            <span class="progress-count">{{ done }}/{{ total }} lessons complete</span>
+        </div>
+        <div class="progress-bar-wrap">
+            <div class="progress-bar" style="width: {{ pct }}%"></div>
+        </div>
+    </div>
+</div>
+
+<div class="lesson-list">
+    {% for lesson in lessons %}
+    <a href="/module/{{ module.id }}/lesson/{{ lesson.slug }}" class="lesson-item {% if lesson.completed %}lesson-item-done{% endif %}">
+        <div class="lesson-item-status">
+            {% if lesson.completed %}
+            <span class="lesson-check done">✅</span>
+            {% else %}
+            <span class="lesson-check pending">○</span>
+            {% endif %}
+        </div>
+        <div class="lesson-item-body">
+            <div class="lesson-item-title">{{ lesson.title }}</div>
+            {% if lesson.duration_min %}
+            <div class="lesson-item-meta">⏱ {{ lesson.duration_min }} min</div>
+            {% endif %}
+        </div>
+        <div class="lesson-item-arrow">→</div>
+    </a>
+    {% endfor %}
+
+    {% if module.quiz_file %}
+    <a href="/module/{{ module.id }}/quiz" class="lesson-item lesson-item-quiz">
+        <div class="lesson-item-status">
+            <span class="lesson-check quiz">📝</span>
+        </div>
+        <div class="lesson-item-body">
+            <div class="lesson-item-title">Module Quiz</div>
+            <div class="lesson-item-meta">Test your knowledge</div>
+        </div>
+        <div class="lesson-item-arrow">→</div>
+    </a>
+    {% endif %}
+</div>
+{% endblock %}

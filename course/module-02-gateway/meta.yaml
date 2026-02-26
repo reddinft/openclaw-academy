@@ -1,0 +1,23 @@
+id: module-02-gateway
+title: "Gateway Architecture"
+description: "Deep dive into the control plane: WebSocket protocol, session management, and how the Gateway daemon works."
+order: 2
+icon: "🏠"
+quiz_file: quiz.yaml
+lessons:
+  - slug: gateway-daemon
+    title: "The Gateway Daemon"
+    file: 01-gateway-daemon.md
+    duration_min: 12
+  - slug: websocket-protocol
+    title: "WebSocket Protocol"
+    file: 02-websocket-protocol.md
+    duration_min: 15
+  - slug: session-store
+    title: "Session Store"
+    file: 03-session-store.md
+    duration_min: 12
+  - slug: configuration-system
+    title: "Configuration System"
+    file: 04-configuration-system.md
+    duration_min: 10

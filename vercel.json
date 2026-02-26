@@ -1,0 +1,6 @@
+{
+  "buildCommand": "pip install -r requirements.txt && python3 scripts/export_static.py",
+  "outputDirectory": "dist",
+  "framework": null,
+  "installCommand": "pip install -r requirements.txt"
+}

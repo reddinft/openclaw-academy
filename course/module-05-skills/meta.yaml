@@ -1,0 +1,19 @@
+id: module-05-skills
+title: "Skills & Hooks"
+description: "The extensibility system: how skills are structured, loaded, and how the hook/cron system works."
+order: 5
+icon: "🎯"
+quiz_file: quiz.yaml
+lessons:
+  - slug: skill-anatomy
+    title: "Skill Anatomy"
+    file: 01-skill-anatomy.md
+    duration_min: 12
+  - slug: skill-loading
+    title: "Skill Loading"
+    file: 02-skill-loading.md
+    duration_min: 10
+  - slug: hooks-and-workspace
+    title: "Hooks & Workspace Files"
+    file: 03-hooks-workspace.md
+    duration_min: 12

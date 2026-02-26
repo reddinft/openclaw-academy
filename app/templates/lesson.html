@@ -1,0 +1,74 @@
+{% extends "base.html" %}
+{% block title %}{{ lesson.title }} — OpenClaw Academy{% endblock %}
+
+{% block content %}
+<div class="lesson-header">
+    <div class="breadcrumbs">
+        <a href="/">All Modules</a>
+        <span class="sep">›</span>
+        <a href="/module/{{ module.id }}">{{ module.title }}</a>
+        <span class="sep">›</span>
+        <span>{{ lesson.title }}</span>
+    </div>
+    <div class="lesson-meta-bar">
+        <span class="lesson-position">Lesson {{ lesson_index + 1 }} of {{ total_lessons }}</span>
+        {% if lesson.duration_min %}
+        <span class="lesson-duration">⏱ {{ lesson.duration_min }} min read</span>
+        {% endif %}
+    </div>
+    <h1 class="lesson-title">{{ lesson.title }}</h1>
+</div>
+
+<div class="lesson-body">
+    {{ content_html | safe }}
+</div>
+
+<div class="lesson-footer">
+    <!-- Progress toggle -->
+    <div id="progress-btn-wrap">
+        <form hx-post="/progress/toggle" hx-target="#progress-btn-wrap" hx-swap="outerHTML">
+            <input type="hidden" name="lesson_id" value="{{ lesson_id }}">
+            <input type="hidden" name="module_id" value="{{ module.id }}">
+            <input type="hidden" name="lesson_slug" value="{{ lesson.slug }}">
+            <input type="hidden" name="currently_completed" value="{{ 1 if is_completed else 0 }}">
+            <button type="submit" class="btn {% if is_completed %}btn-success{% else %}btn-outline{% endif %}">
+                {% if is_completed %}✅ Completed{% else %}Mark Complete{% endif %}
+            </button>
+        </form>
+    </div>
+
+    <!-- Navigation -->
+    <div class="lesson-nav">
+        {% if prev_lesson %}
+        <a href="/module/{{ module.id }}/lesson/{{ prev_lesson.slug }}" class="btn btn-ghost">
+            ← {{ prev_lesson.title }}
+        </a>
+        {% else %}
+        <a href="/module/{{ module.id }}" class="btn btn-ghost">← Module Overview</a>
+        {% endif %}
+
+        {% if next_lesson %}
+        <a href="/module/{{ module.id }}/lesson/{{ next_lesson.slug }}" class="btn btn-primary">
+            {{ next_lesson.title }} →
+        </a>
+        {% else %}
+        {% if module.quiz_file %}
+        <a href="/module/{{ module.id }}/quiz" class="btn btn-primary">Take Quiz →</a>
+        {% else %}
+        <a href="/" class="btn btn-primary">Back to Modules →</a>
+        {% endif %}
+        {% endif %}
+    </div>
+</div>
+
+<!-- Lesson sidebar: lesson list for this module -->
+<div class="lesson-sidebar-lessons">
+    {% for l in module.lessons %}
+    <a href="/module/{{ module.id }}/lesson/{{ l.slug }}" 
+       class="sidebar-lesson-item {% if l.slug == lesson.slug %}active{% endif %} {% if l.completed %}done{% endif %}">
+        <span class="sidebar-lesson-check">{% if l.completed %}✅{% else %}○{% endif %}</span>
+        <span class="sidebar-lesson-name">{{ l.title }}</span>
+    </a>
+    {% endfor %}
+</div>
+{% endblock %}

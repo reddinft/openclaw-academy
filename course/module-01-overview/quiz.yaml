@@ -1,0 +1,108 @@
+id: m01-quiz
+title: "Module 1 Quiz: OpenClaw Overview"
+passing_score: 70
+questions:
+  - id: q1
+    text: "What is the primary role of the OpenClaw Gateway?"
+    type: single_choice
+    options:
+      - id: a
+        text: "A message broker that routes between LLM providers only"
+      - id: b
+        text: "The long-lived control plane that owns all channel connections, sessions, and tool execution"
+      - id: c
+        text: "A browser automation framework for scraping websites"
+      - id: d
+        text: "A Docker container that runs LLM models locally"
+    correct: b
+    explanation: "The Gateway is the single long-lived Node.js process that owns all messaging surfaces, manages sessions, runs the agent runtime, and exposes a WebSocket API for control clients."
+
+  - id: q2
+    text: "Where does OpenClaw store all its state (sessions, transcripts, config)?"
+    type: single_choice
+    options:
+      - id: a
+        text: "In a PostgreSQL database at localhost:5432"
+      - id: b
+        text: "In Redis at localhost:6379"
+      - id: c
+        text: "In ~/.openclaw/ as JSON/JSONL files — no external database"
+      - id: d
+        text: "In the cloud at openclaw.ai"
+    correct: c
+    explanation: "OpenClaw uses plain files: openclaw.json for config, sessions.json for session registry, and .jsonl files for conversation transcripts. No external database required."
+
+  - id: q3
+    text: "What technology does OpenClaw use to connect to WhatsApp?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The official WhatsApp Business API (Meta)"
+      - id: b
+        text: "Baileys (a WhatsApp Web protocol implementation)"
+      - id: c
+        text: "Twilio's WhatsApp integration"
+      - id: d
+        text: "Direct XMPP protocol"
+    correct: b
+    explanation: "OpenClaw uses Baileys, an open-source Node.js library that implements the WhatsApp Web multi-device protocol. This requires a QR scan to link your WhatsApp account."
+
+  - id: q4
+    text: "What happens when a message arrives from a sender NOT on the allowlist?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The message is silently dropped"
+      - id: b
+        text: "The message is forwarded to the owner for manual review"
+      - id: c
+        text: "A pairing code is sent to the unknown sender and the message is not processed"
+      - id: d
+        text: "The Gateway shuts down as a security measure"
+    correct: c
+    explanation: "By default (dmPolicy: 'pairing'), unknown senders receive a one-time pairing code. The owner must approve them with 'openclaw pairing approve'. Only then will their messages be processed."
+
+  - id: q5
+    text: "Which of these is NOT a core OpenClaw tool available to the agent?"
+    type: single_choice
+    options:
+      - id: a
+        text: "exec (run shell commands)"
+      - id: b
+        text: "browser (control a web browser)"
+      - id: c
+        text: "deploy (deploy Docker containers)"
+      - id: d
+        text: "nodes (control paired iOS/Android devices)"
+    correct: c
+    explanation: "OpenClaw's core tools include read, write, edit, exec, browser, canvas, nodes, message, web_search, web_fetch, image, and tts. 'deploy' is not a built-in tool — you'd implement that with exec or a custom skill."
+
+  - id: q6
+    text: "What is a 'session' in OpenClaw terms?"
+    type: single_choice
+    options:
+      - id: a
+        text: "An authenticated HTTP session for the Web UI"
+      - id: b
+        text: "A named conversation context — a unique key mapping to a JSONL transcript and metadata"
+      - id: c
+        text: "A running process managed by the Gateway supervisor"
+      - id: d
+        text: "A WebSocket connection from a control client"
+    correct: b
+    explanation: "A session is OpenClaw's unit of conversation continuity. Each session has a unique key (e.g., agent:main:telegram:dm:123456789), a JSONL transcript file, and metadata like token counts and last-updated timestamp."
+
+  - id: q7
+    text: "What is the purpose of the workspace files (AGENTS.md, SOUL.md, etc.)?"
+    type: single_choice
+    options:
+      - id: a
+        text: "They are read-only documentation files for the developer"
+      - id: b
+        text: "They are injected into the agent's context at session start, shaping its behavior and persona"
+      - id: c
+        text: "They configure the Gateway's networking and security settings"
+      - id: d
+        text: "They store the session transcripts in human-readable format"
+    correct: b
+    explanation: "Workspace files (AGENTS.md, SOUL.md, TOOLS.md, USER.md, IDENTITY.md) are injected into the system prompt at the start of each new session. They define operating instructions, persona, tool notes, user context, and agent identity."

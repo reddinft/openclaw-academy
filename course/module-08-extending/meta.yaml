@@ -1,0 +1,19 @@
+id: module-08-extending
+title: "Extending OpenClaw"
+description: "Writing skills, custom routing, and integrating with the Model Context Protocol (MCP)."
+order: 8
+icon: "🔧"
+quiz_file: quiz.yaml
+lessons:
+  - slug: writing-a-skill
+    title: "Writing a Skill"
+    file: 01-writing-a-skill.md
+    duration_min: 15
+  - slug: custom-routing
+    title: "Custom Routing"
+    file: 02-custom-routing.md
+    duration_min: 12
+  - slug: mcp-integration
+    title: "MCP Integration"
+    file: 03-mcp-integration.md
+    duration_min: 12
