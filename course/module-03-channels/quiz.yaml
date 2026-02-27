@@ -1,14 +1,108 @@
-id: mmodule-quiz
-title: "Module module Quiz"
+id: m03-quiz
+title: "Module 3 Quiz: The Channel System"
 passing_score: 70
 questions:
   - id: q1
-    text: "Quiz questions for this module are coming soon."
+    text: "What library does OpenClaw use to connect to WhatsApp?"
     type: single_choice
     options:
       - id: a
-        text: "Coming soon"
+        text: "The official Meta WhatsApp Business API"
       - id: b
-        text: "Stay tuned"
-    correct: a
-    explanation: "This module's quiz is still being written. Check back after the lesson content is complete."
+        text: "Baileys (WhatsApp Web multi-device protocol)"
+      - id: c
+        text: "Twilio's WhatsApp integration"
+      - id: d
+        text: "signal-cli over a JSON-RPC socket"
+    correct: b
+    explanation: "OpenClaw uses Baileys, an open-source Node.js library implementing the WhatsApp Web multi-device protocol. It requires a QR scan to link the session — the same way WhatsApp Web in a browser works."
+
+  - id: q2
+    text: "You configure 'dmPolicy: pairing' for Telegram. What happens when an unknown sender DMs your bot for the first time?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The message is silently dropped with no response"
+      - id: b
+        text: "The message is processed normally and the agent responds"
+      - id: c
+        text: "The bot sends them a pairing code and their message is not processed until you approve them"
+      - id: d
+        text: "The Gateway shuts down as a security precaution"
+    correct: c
+    explanation: "In pairing mode, unknown senders receive a pairing code. You must run 'openclaw pairing approve telegram <CODE>' before their messages are processed. Codes expire after 1 hour."
+
+  - id: q3
+    text: "What session key would be generated for a message from Discord user 987654321 in channel 123456789?"
+    type: single_choice
+    options:
+      - id: a
+        text: "discord:987654321:channel:123456789"
+      - id: b
+        text: "agent:main:discord:channel:123456789"
+      - id: c
+        text: "agent:main:discord:dm:987654321"
+      - id: d
+        text: "main:discord:987654321"
+    correct: b
+    explanation: "Guild channel sessions are keyed by channel ID, not user ID. The pattern is agent:<agentId>:<channel>:<type>:<id>. The user who sent the message doesn't change which session it goes to — the channel does."
+
+  - id: q4
+    text: "Telegram bots have Privacy Mode enabled by default. What does this affect?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The bot can't see any messages at all, not even DMs"
+      - id: b
+        text: "The bot only sees messages that @mention it in groups — it misses all other group messages"
+      - id: c
+        text: "The bot token is encrypted and rotated every 24 hours"
+      - id: d
+        text: "The bot can only respond to users in the allowFrom list"
+    correct: b
+    explanation: "Telegram's Privacy Mode limits bots to only seeing messages that @mention them in groups. If you want requireMention: false to actually work, you must disable Privacy Mode in BotFather with /setprivacy, then remove and re-add the bot to each group."
+
+  - id: q5
+    text: "What is the key difference between Slack's Socket Mode and HTTP Events API?"
+    type: single_choice
+    options:
+      - id: a
+        text: "Socket Mode requires two bot tokens; HTTP mode only needs one"
+      - id: b
+        text: "Socket Mode uses a persistent WebSocket (no public URL needed); HTTP mode requires a public HTTPS endpoint"
+      - id: c
+        text: "Socket Mode only works for DMs; HTTP mode is required for channel messages"
+      - id: d
+        text: "They are identical in behaviour — Socket Mode is just HTTP with keep-alive"
+    correct: b
+    explanation: "Socket Mode maintains a persistent outbound WebSocket from your gateway to Slack's servers, so no public URL or port forwarding is required. HTTP Events API mode requires a publicly-accessible HTTPS endpoint that Slack can POST events to."
+
+  - id: q6
+    text: "Which channels require a separate plugin install and are NOT bundled with OpenClaw core?"
+    type: single_choice
+    options:
+      - id: a
+        text: "Telegram, WhatsApp, and Discord"
+      - id: b
+        text: "Slack and Google Chat"
+      - id: c
+        text: "Matrix, Microsoft Teams, IRC, and Nostr"
+      - id: d
+        text: "Signal and BlueBubbles"
+    correct: c
+    explanation: "Matrix, MS Teams, IRC, Nostr, LINE, Mattermost, and several other channels ship as optional plugins (openclaw plugins install @openclaw/matrix, etc.). Telegram, WhatsApp, Discord, Slack, Google Chat, Signal, and BlueBubbles are bundled in core."
+
+  - id: q7
+    text: "You want your Discord bot to respond to every message in your private server WITHOUT being @mentioned each time. What config change do you need?"
+    type: single_choice
+    options:
+      - id: a
+        text: "Set channels.discord.dmPolicy to 'open'"
+      - id: b
+        text: "Set requireMention: false in the guild config under channels.discord.guilds"
+      - id: c
+        text: "Enable the Message Content Intent in the Discord Developer Portal only — no config change needed"
+      - id: d
+        text: "Set channels.discord.groupPolicy to 'disabled'"
+    correct: b
+    explanation: "requireMention is a per-guild (and optionally per-channel) setting in channels.discord.guilds.<guildId>.requireMention. Setting it to false makes the bot respond to all messages in allowlisted channels without needing a direct @mention. Note: you still need Message Content Intent enabled in the Developer Portal or the bot won't see message content at all."

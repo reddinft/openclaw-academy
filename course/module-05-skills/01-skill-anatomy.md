@@ -1,317 +1,204 @@
 # Skill Anatomy
 
-Skills are how you teach your agent new tricks. They're self-contained packages of instructions + tools that get injected into the agent's context — like handing someone a reference card before they start a task.
+The agent doesn't know how to use `peekaboo` or `clawhub` or `himalaya` out of the box. Skills teach it.
 
-In this lesson we'll crack open a skill and examine every piece.
+A **skill** is a directory containing a `SKILL.md` file. That file tells the agent what capability exists, how to invoke it, and when it applies. Nothing more is required — though real skills usually add scripts, reference configs, and supporting assets alongside.
 
----
-
-## What Is a Skill?
-
-A skill is a **directory** containing at minimum one file: `SKILL.md`. That file has YAML frontmatter (metadata) and Markdown body (instructions). When the agent loads the skill, the instructions become part of its system prompt and any registered tools become available.
-
-> **Key Takeaway:** A skill = metadata (YAML frontmatter) + instructions (Markdown) + optional scripts and assets. That's it.
+When OpenClaw starts a session, it scans the skill directories, filters down to eligible skills, and injects a compact XML block into the system prompt. The agent reads that list and knows what it can do.
 
 ---
 
-## The SKILL.md File
+## The Simplest Possible Skill
 
-This is the heart of every skill. Let's look at a complete example — a weather skill:
+```
+~/.openclaw/workspace/skills/hello-world/
+└── SKILL.md
+```
 
 ```markdown
 ---
-name: weather
-description: Get current weather and forecasts for any location
-read_when: "The user asks about weather, temperature, or forecasts"
-metadata:
-  {
-    "openclaw": {
-      "requires": {
-        "env": ["WEATHER_API_KEY"],
-        "bins": ["curl"]
-      },
-      "primaryEnv": "WEATHER_API_KEY",
-      "homepage": "https://github.com/example/weather-skill",
-      "emoji": "🌤️",
-      "os": ["darwin", "linux"],
-      "install": [
-        { "type": "download", "url": "https://example.com/weather-cli" }
-      ]
-    }
-  }
+name: hello-world
+description: Say hello when the user asks for a greeting.
 ---
 
-# Weather Skill
+# Hello World
 
-You can look up current weather conditions and forecasts.
-
-## Tools
-
-- **get_weather**: Fetch current conditions for a city or coordinates
-- **get_forecast**: Fetch a multi-day forecast
-
-## Usage Notes
-
-- Always confirm the location with the user if ambiguous
-- Prefer Celsius unless the user has indicated a preference for Fahrenheit
-- Include humidity and wind when reporting conditions
+When the user asks for a greeting, respond with: "Hello from your custom skill!"
 ```
 
-Let's break down every piece.
-
----
-
-## Frontmatter Fields
-
-| Field | Required | Description |
-|-------|----------|-------------|
-| `name` | Yes | Unique skill identifier (lowercase, hyphens OK) |
-| `description` | Yes | One-line summary shown in skill listings |
-| `read_when` | No | Natural-language condition for when the agent should load this skill |
-| `metadata` | No | Nested object with OpenClaw-specific configuration |
-
-### The `metadata.openclaw` Object
-
-This is where you declare requirements, installation hints, and platform constraints:
-
-```yaml
-metadata:
-  {
-    "openclaw": {
-      "requires": {
-        "bins": ["ffmpeg", "curl"],
-        "env": ["API_KEY"],
-        "config": ["channels.telegram"]
-      },
-      "primaryEnv": "API_KEY",
-      "homepage": "https://github.com/you/your-skill",
-      "emoji": "🎯",
-      "os": ["darwin", "linux", "win32"],
-      "install": [
-        { "type": "brew", "package": "ffmpeg" },
-        { "type": "node", "package": "some-cli" }
-      ]
-    }
-  }
-```
-
-| Nested Field | Purpose |
-|-------------|---------|
-| `requires.bins` | Binary executables that must be in `$PATH` |
-| `requires.env` | Environment variables that must be set |
-| `requires.config` | Config paths that must exist in `openclaw.json` |
-| `primaryEnv` | The main API key env var (used by config UI) |
-| `homepage` | Link to docs or repo |
-| `emoji` | Display emoji in skill listings |
-| `os` | Platform allowlist — `"darwin"`, `"linux"`, `"win32"` |
-| `install` | Installer hints (brew, node, go, uv, download) |
-
----
-
-## Gating: When Does a Skill Load?
-
-Not every skill loads on every turn. OpenClaw uses two gating mechanisms:
-
-### 1. Eligibility Gating (Hard Requirements)
-
-If `requires` is specified, the skill only appears as eligible when all requirements are met:
-
-```
-requires.bins → checked via `which <binary>`
-requires.env → checked via process.env
-requires.config → checked via config path lookup
-os → checked via process.platform
-```
-
-If any check fails, the skill is **invisible** — the agent never sees it.
-
-### 2. `read_when` Gating (Soft / Contextual)
-
-The `read_when` field is a natural-language hint injected into the `<available_skills>` block. The agent sees:
-
-```xml
-<available_skills>
-  <skill name="weather">Get current weather and forecasts for any location
-    Load when: The user asks about weather, temperature, or forecasts</skill>
-  <skill name="spotify">Control Spotify playback
-    Load when: The user asks about music, playlists, or Spotify</skill>
-</available_skills>
-```
-
-The agent then decides whether to "read" the full skill instructions based on the current conversation. This keeps the system prompt lean — only relevant skill instructions are loaded.
-
-> **Key Takeaway:** Eligibility gating is binary (requirements met or not). `read_when` gating is a soft hint — the model decides whether the skill is relevant to the current turn.
-
----
-
-## The Markdown Body
-
-Everything below the frontmatter `---` is the skill's instruction set. This gets injected into the agent's context when the skill is loaded.
-
-Best practices for writing skill instructions:
-
-| Do | Don't |
-|----|-------|
-| Be specific about tool names and parameters | Write vague "you can do things" instructions |
-| Include usage examples | Assume the agent knows your API |
-| Specify output formatting preferences | Leave output format ambiguous |
-| Note edge cases and error handling | Ignore failure modes |
-| Keep it under ~2000 tokens | Write a novel — context window is precious |
-
----
-
-## Token Budget
-
-Skills consume context window space. OpenClaw calculates the token impact deterministically:
-
-```
-Base cost:        ~195 characters (skill XML wrapper)
-Per-skill entry:  ~97 characters (name, description in available_skills)
-Instructions:     length of Markdown body (when loaded)
-```
-
-For a typical skill with a 500-character description and 1500-character instruction body, you're looking at ~2200 characters (~550 tokens). With 10 skills loaded, that's ~5500 tokens of context used before the conversation even starts.
+That's it. Two required frontmatter keys — `name` and `description` — and some instructions. On the next session, the agent sees it.
 
 ---
 
 ## Skill Directory Structure
 
-A skill can be more than just `SKILL.md`. Here's the full anatomy:
+Real skills grow beyond a single file. Here's a complete layout:
 
 ```
-my-weather-skill/
-├── SKILL.md           ← Required: metadata + instructions
-├── handler.ts         ← Optional: tool handler (TypeScript)
-├── assets/
-│   ├── icons/         ← Optional: images, icons
-│   └── templates/     ← Optional: prompt templates, configs
-├── scripts/
-│   ├── install.sh     ← Optional: post-install script
-│   └── check.sh       ← Optional: health check
-└── README.md          ← Optional: human-facing docs (not loaded by agent)
+skills/
+└── weather/
+    ├── SKILL.md          ← Required. The skill descriptor.
+    ├── get-weather.sh    ← A script the skill instructs the agent to call.
+    ├── config.json       ← Default config referenced in SKILL.md.
+    └── README.md         ← Human-readable docs (not injected).
 ```
 
-### Scripts
-
-Scripts in the `scripts/` directory are lifecycle hooks:
-
-| Script | When it runs |
-|--------|-------------|
-| `install.sh` | After `clawhub install` or manual placement |
-| `check.sh` | During `openclaw skills check` health validation |
-| `uninstall.sh` | Before removal |
-
-### Assets
-
-The `assets/` directory holds static files the skill might reference — icons for Canvas rendering, prompt templates, configuration snippets. These are available to the skill's tool handlers but are **not** automatically injected into the agent's context.
-
----
-
-## A Real-World Example: The `oracle` Skill
-
-Let's look at how a bundled skill is structured. The `oracle` skill lets the agent perform web searches:
+The `SKILL.md` can reference other files in its directory using the `{baseDir}` placeholder:
 
 ```markdown
 ---
-name: oracle
-description: Search the web and fetch page content
-read_when: "The user asks a question that requires current information, news, or web research"
-metadata:
-  {
-    "openclaw": {
-      "emoji": "🔮",
-      "os": ["darwin", "linux", "win32"]
-    }
-  }
+name: weather
+description: Get current weather and forecasts for any location.
 ---
 
-# Oracle — Web Search & Fetch
+# Weather Skill
 
-Use the `web_search` and `web_fetch` tools to find current information.
-
-## Guidelines
-
-- Search before guessing when the user asks about current events, prices, or recent news
-- Fetch specific URLs when the user shares a link or you need detailed page content
-- Summarize results concisely — don't dump raw HTML
-- Cite sources with URLs when providing factual information
+Use `exec` to run `{baseDir}/get-weather.sh <location>` for current conditions.
 ```
 
-Notice how minimal it is — the tools (`web_search`, `web_fetch`) are registered by the Gateway core, not by the skill itself. The skill's job is just to provide **instructions** for when and how to use them.
+When OpenClaw injects this skill into the prompt, `{baseDir}` is replaced with the skill's absolute path. The agent can now call the right script — no guessing.
 
 ---
 
-## Configuring Skills via `openclaw.json`
+## SKILL.md Frontmatter Reference
 
-Skills can be configured in your main config file:
+The frontmatter is YAML and must use **single-line values only** (the agent's parser is strict about this).
 
-```json5
-{
-  skills: {
-    // Per-skill overrides
-    entries: {
-      weather: {
-        enabled: true,
-        apiKey: "wk_abc123",        // Injected as primaryEnv
-        env: {
-          WEATHER_UNITS: "metric"   // Extra env vars
-        }
-      },
-      "risky-skill": {
-        enabled: false              // Disable a specific skill
-      }
-    },
-    // Loading options
-    load: {
-      extraDirs: ["/home/me/my-skills"],  // Additional search paths
-      watch: true                          // Auto-reload on SKILL.md changes
-    },
-    // Only allow specific bundled skills
-    allowBundled: ["oracle", "weather", "spotify"]
-  }
-}
+### Required
+
+| Key | What it does |
+|-----|-------------|
+| `name` | Unique skill identifier. Used for config overrides and precedence resolution. |
+| `description` | One-line summary injected into the skills list. Write it like an API description — the agent reads it to decide *if* a skill applies. |
+
+### Optional
+
+| Key | Default | What it does |
+|-----|---------|-------------|
+| `homepage` | — | URL shown in the macOS Skills UI as "Website" |
+| `user-invocable` | `true` | When `true`, the skill appears as a slash command the *user* can invoke directly (e.g., `/weather Sydney`) |
+| `disable-model-invocation` | `false` | When `true`, the skill is excluded from the model prompt but still available via user slash command |
+| `command-dispatch` | — | Set to `tool` to bypass the model entirely and call a tool directly on slash command |
+| `command-tool` | — | Tool name to invoke when `command-dispatch: tool` is set |
+| `metadata` | — | Single-line JSON object for gating rules (see below) |
+
+### The `metadata` field
+
+This is where load-time gating lives:
+
+```markdown
+---
+name: peekaboo
+description: Capture and automate macOS UI screenshots.
+metadata: {"openclaw": {"requires": {"bins": ["peekaboo"], "os": ["darwin"]}, "emoji": "👁️"}}
+---
 ```
+
+Fields under `metadata.openclaw`:
+
+| Field | What it does |
+|-------|-------------|
+| `requires.bins` | List of binaries that must exist on `PATH`. If any are missing, the skill is not loaded. |
+| `requires.anyBins` | At least one of these must exist on `PATH`. |
+| `requires.env` | Environment variables that must be set (or supplied via config). |
+| `requires.config` | `openclaw.json` config paths that must be truthy (e.g., `browser.enabled`). |
+| `os` | Platform filter: `darwin`, `linux`, `win32`. |
+| `always: true` | Skip all gating — always load this skill. |
+| `primaryEnv` | The env var name this skill's API key maps to (for `skills.entries.<name>.apiKey`). |
+
+> **The gating is a courtesy to the agent, not a security boundary.** It prevents the agent from being told it can use a tool that isn't installed. The real security is in tool policy and sandboxing — covered in Module 6.
 
 ---
 
-## CLI: Managing Skills
+## How the Agent Sees Skills
 
-```bash
-# List all loaded skills
-openclaw skills list
+When a session starts, OpenClaw builds a compact XML block and injects it into the system prompt:
 
-# Show details for a specific skill
-openclaw skills info weather
-
-# Check health (runs requires checks)
-openclaw skills check
-
-# Enable/disable
-openclaw skills enable weather
-openclaw skills disable risky-skill
+```xml
+<available_skills>
+  <skill>
+    <name>weather</name>
+    <description>Get current weather and forecasts for any location.</description>
+    <location>/Users/you/.openclaw/workspace/skills/weather/SKILL.md</location>
+  </skill>
+  <skill>
+    <name>peekaboo</name>
+    <description>Capture and automate macOS UI screenshots.</description>
+    <location>/opt/homebrew/lib/node_modules/openclaw/skills/peekaboo/SKILL.md</location>
+  </skill>
+</available_skills>
 ```
+
+The agent is told: if a task matches a skill's description, read the `SKILL.md` at the given path for detailed instructions, then follow them.
+
+The token cost is predictable: roughly **24 tokens per skill** (plus field lengths). A typical install with 10–15 skills adds ~400–600 tokens to the system prompt.
+
+---
+
+## Skills Extend the Agent Without Changing Core Code
+
+This is the elegant part. You don't need to modify OpenClaw to add a new capability. You just:
+
+1. Create a directory with a `SKILL.md`
+2. Put any scripts or assets alongside it
+3. Start a new session
+
+The agent discovers it automatically and knows when to use it.
+
+```mermaid
+graph LR
+    SKILL["skills/my-skill/\n SKILL.md\n script.sh"]
+    PROMPT["System prompt\n<available_skills>"]
+    AGENT["Agent Runtime"]
+    EXEC["exec tool\n runs script.sh"]
+
+    SKILL -->|"load-time injection"| PROMPT
+    PROMPT -->|"informs"| AGENT
+    AGENT -->|"when task matches"| EXEC
+```
+
+Skills are also how OpenClaw's bundled tools (browser control, ClawHub, peekaboo, sag) announce their capabilities. Even first-party features ship as `SKILL.md` files, following the same pattern you'd use for your own custom skill.
+
+---
+
+## A Real Skill: Dissecting `clawhub`
+
+The bundled `clawhub` skill shows what a production-quality `SKILL.md` looks like:
+
+```markdown
+---
+name: clawhub
+description: Use the ClawHub CLI to search, install, update, and publish agent skills from clawhub.com.
+metadata: {"openclaw": {"requires": {"bins": ["clawhub"]}, "install": [{"id": "npm", "kind": "node", "pkg": "clawhub", "bins": ["clawhub"], "label": "Install ClawHub CLI (npm)"}]}}
+---
+
+# ClawHub
+
+Use `clawhub` to manage skills...
+```
+
+Notice:
+- `requires.bins: ["clawhub"]` gates the skill — it won't load if the CLI isn't installed
+- `install` tells the macOS Skills UI how to install it (npm package, one click)
+- The description is precise enough for the agent to know when to activate this skill
 
 ---
 
 ## Summary
 
-| Component | File | Purpose |
-|-----------|------|---------|
-| Metadata | SKILL.md frontmatter | Name, description, requirements, gating |
-| Instructions | SKILL.md body | Agent-facing docs injected into context |
-| Tools | handler.ts | Tool implementations (optional) |
-| Assets | assets/ | Static files for tools |
-| Scripts | scripts/ | Lifecycle hooks (install, check, uninstall) |
-| Config | openclaw.json `skills.entries` | Per-skill overrides, env vars |
+| Concept | Detail |
+|---------|--------|
+| Minimum skill | A directory + `SKILL.md` with `name` + `description` |
+| Gating | `metadata.openclaw.requires` — bins, env, os, config |
+| Runtime reference | `{baseDir}` placeholder resolves to the skill directory |
+| Injection cost | ~24 tokens per skill + field lengths |
+| Skill discovery | Scanned at session start from three locations (covered in the next lesson) |
 
 ---
 
-> **Exercise:** Create a minimal skill directory called `my-first-skill/` with a `SKILL.md` that:
-> 1. Has a `name`, `description`, and `read_when` in the frontmatter
-> 2. Requires one environment variable (make one up)
-> 3. Has a Markdown body with instructions for a hypothetical tool
-> 4. Place it in `~/.openclaw/workspace/skills/` and run `openclaw skills list` to verify it appears
-
----
-
-In the next lesson, we'll explore **where skills live** — the three-tier loading system and what happens when skill names collide.
+> **Exercise:** Browse one bundled skill you find interesting. Its location is inside the OpenClaw npm package:
+> ```bash
+> ls ~/.npm-global/lib/node_modules/openclaw/skills/
+> cat ~/.npm-global/lib/node_modules/openclaw/skills/weather/SKILL.md
+> ```
+> Read the instructions section (after the frontmatter). Notice how it guides the agent without over-specifying.

@@ -1,14 +1,108 @@
-id: mmodule-quiz
-title: "Module module Quiz"
+id: m05-quiz
+title: "Module 5 Quiz: Skills & Hooks"
 passing_score: 70
 questions:
   - id: q1
-    text: "Quiz questions for this module are coming soon."
+    text: "What are the two required frontmatter keys in a SKILL.md file?"
     type: single_choice
     options:
       - id: a
-        text: "Coming soon"
+        text: "title and version"
       - id: b
-        text: "Stay tuned"
-    correct: a
-    explanation: "This module's quiz is still being written. Check back after the lesson content is complete."
+        text: "name and description"
+      - id: c
+        text: "slug and instructions"
+      - id: d
+        text: "id and allowed-tools"
+    correct: b
+    explanation: "Every SKILL.md requires at minimum a 'name' (unique identifier) and a 'description' (the one-line summary injected into the system prompt). Everything else is optional."
+
+  - id: q2
+    text: "A skill exists in both ~/.openclaw/skills/ and the bundled skills. Which version wins?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The bundled version — it ships with OpenClaw and is authoritative"
+      - id: b
+        text: "The managed version in ~/.openclaw/skills/ — it has higher precedence"
+      - id: c
+        text: "Neither — OpenClaw raises a conflict error and refuses to load either"
+      - id: d
+        text: "Whichever was modified most recently"
+    correct: b
+    explanation: "Skill precedence is: workspace/skills > ~/.openclaw/skills > bundled skills. The managed/local version in ~/.openclaw/skills always beats the bundled copy. This lets you override any bundled skill without touching the OpenClaw package."
+
+  - id: q3
+    text: "What does metadata.openclaw.requires.bins do in a SKILL.md?"
+    type: single_choice
+    options:
+      - id: a
+        text: "Lists the tools the agent must call when using this skill"
+      - id: b
+        text: "Specifies binary executables that must exist on PATH for the skill to be eligible"
+      - id: c
+        text: "Declares which npm packages to install before loading the skill"
+      - id: d
+        text: "Defines which OpenClaw built-in tools the skill is allowed to use"
+    correct: b
+    explanation: "requires.bins is a load-time gate. If any listed binary is missing from PATH, the skill is silently skipped — the agent never sees it. This prevents the agent from being told it can use a tool that isn't installed."
+
+  - id: q4
+    text: "You want to add a skill that only your 'personal' agent uses (not the 'work' agent). Where do you put it?"
+    type: single_choice
+    options:
+      - id: a
+        text: "~/.openclaw/skills/ — it's shared but you can gate it with requires.config"
+      - id: b
+        text: "Inside the OpenClaw npm package skills directory"
+      - id: c
+        text: "In the personal agent's workspace: ~/.openclaw/workspace-personal/skills/"
+      - id: d
+        text: "In ~/.openclaw/openclaw.json under skills.entries"
+    correct: c
+    explanation: "Per-agent skills live in <workspace>/skills/ for that specific agent. Skills in ~/.openclaw/skills/ are shared across all agents on the machine. Each agent's workspace directory is configured via agents.list[].workspace in openclaw.json."
+
+  - id: q5
+    text: "Which ClawHub command updates all installed skills to their latest versions?"
+    type: single_choice
+    options:
+      - id: a
+        text: "clawhub sync --all"
+      - id: b
+        text: "clawhub upgrade"
+      - id: c
+        text: "clawhub update --all"
+      - id: d
+        text: "clawhub refresh"
+    correct: c
+    explanation: "clawhub update --all updates all installed skills by comparing local contents to the registry. clawhub sync --all is for publishing/uploading your own skills to the registry, not updating from it."
+
+  - id: q6
+    text: "What does the 'session-memory' bundled hook do?"
+    type: single_choice
+    options:
+      - id: a
+        text: "Runs MEMORY.md as a startup checklist when the gateway boots"
+      - id: b
+        text: "Saves a summary of the ending session to a dated memory file when /new is issued"
+      - id: c
+        text: "Injects extra bootstrap files into the system prompt at session start"
+      - id: d
+        text: "Logs all sessions to ~/.openclaw/logs/sessions.log for auditing"
+    correct: b
+    explanation: "The session-memory hook listens for the command:new event. When you issue /new (session reset), it saves context from the ending session to memory/YYYY-MM-DD.md in the workspace. This is how the agent accumulates long-term memory across session resets."
+
+  - id: q7
+    text: "BOOT.md is intended to be run:"
+    type: single_choice
+    options:
+      - id: a
+        text: "At the start of every new agent turn"
+      - id: b
+        text: "At the start of every new session"
+      - id: c
+        text: "Once per Gateway restart, after channels come online"
+      - id: d
+        text: "On a fixed schedule, every 30 minutes"
+    correct: c
+    explanation: "BOOT.md is executed by the boot-md hook on the gateway:startup event — once per Gateway restart, after channels come online. It's a startup checklist, not a per-session or per-turn routine. HEARTBEAT.md is what runs periodically (every 30-60 minutes)."

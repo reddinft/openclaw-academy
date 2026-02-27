@@ -1,6 +1,6 @@
 id: module-09-deployment
 title: "Deployment Patterns"
-description: "macOS launchd, Docker, Linux systemd, VPS/cloud — how to run OpenClaw reliably in production."
+description: "How to run OpenClaw reliably — macOS LaunchAgent, Docker Compose, Linux VPS with systemd, HTTPS reverse proxy, and Tailscale remote access."
 order: 9
 icon: "🚀"
 quiz_file: quiz.yaml
@@ -12,8 +12,8 @@ lessons:
   - slug: docker-deployment
     title: "Docker Deployment"
     file: 02-docker-deployment.md
-    duration_min: 12
+    duration_min: 15
   - slug: linux-vps-deployment
-    title: "Linux & VPS Deployment"
+    title: "Linux VPS Deployment"
     file: 03-linux-vps.md
-    duration_min: 12
+    duration_min: 15

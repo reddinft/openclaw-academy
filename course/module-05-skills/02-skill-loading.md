@@ -1,309 +1,271 @@
-# Skill Loading & Precedence
+# Skill Loading
 
-You've seen how a single skill is structured. But where do skills come from? OpenClaw loads skills from **three locations**, and the order matters — a lot. In this lesson we'll walk through the loading system, name conflicts, and how to control exactly which skills your agent sees.
+Where does OpenClaw find skills? How does it decide which ones are eligible? And what happens when the same skill name exists in two places?
+
+These questions matter as soon as you start adding your own skills — because the precedence rules determine which version wins.
 
 ---
 
-## The Three Tiers
+## Three Skill Locations
 
-Skills are discovered from three directories, checked in this order:
+OpenClaw loads skills from three places, in this order of precedence (highest first):
+
+```
+1. <workspace>/skills/       ← Your custom skills (win all conflicts)
+2. ~/.openclaw/skills/       ← Managed/local skills (ClawHub installs here by default)
+3. bundled skills            ← Shipped with the npm package
+```
+
+Plus an optional fourth source, at the lowest precedence:
+
+```
+4. skills.load.extraDirs     ← Extra folders configured in openclaw.json
+```
+
+If the same skill `name` appears in more than one location, the highest-precedence copy wins. Workspace skills always beat managed skills, which always beat bundled skills.
 
 ```mermaid
 graph TB
-    subgraph Priority["Loading Priority (highest → lowest)"]
-        direction TB
-        WS["🏠 Workspace Skills<br/><code>&lt;workspace&gt;/skills/</code><br/>Highest priority"]
-        MG["📦 Managed Skills<br/><code>~/.openclaw/skills/</code><br/>Medium priority"]
-        BN["🔧 Bundled Skills<br/>Ships with OpenClaw<br/>Lowest priority"]
-    end
+    WS["workspace/skills/<br/>(highest — yours)"]
+    MGD["~/.openclaw/skills/<br/>(ClawHub / managed)"]
+    BND["bundled skills<br/>(shipped with OpenClaw)"]
+    EXTRA["extraDirs<br/>(lowest)"]
 
-    WS --> MG --> BN
-
-    style WS fill:#2d5a2d,stroke:#4a4a4a,color:#fff
-    style MG fill:#2d4a5a,stroke:#4a4a4a,color:#fff
-    style BN fill:#5a4a2d,stroke:#4a4a4a,color:#fff
+    WS -->|"conflict: workspace wins"| MERGE["Merged skill list"]
+    MGD --> MERGE
+    BND --> MERGE
+    EXTRA --> MERGE
 ```
 
-| Tier | Location | Who puts skills here | Use case |
-|------|----------|---------------------|----------|
-| **Workspace** | `<workspace>/skills/` | You (manually or via ClawHub) | Personal customizations, project-specific skills |
-| **Managed** | `~/.openclaw/skills/` | ClawHub (`clawhub install`) | Community skills, shared across workspaces |
-| **Bundled** | Inside the OpenClaw package | OpenClaw maintainers | Core capabilities (oracle, spotify, etc.) |
-
-The default workspace is `~/.openclaw/workspace/`, so workspace skills live at `~/.openclaw/workspace/skills/` unless you've configured a different workspace path.
+> **Practical use case:** You want to tweak a bundled skill without touching the OpenClaw package. Copy it into `~/.openclaw/skills/<name>/`, modify the `SKILL.md`, and your version wins. On the next session OpenClaw uses your copy.
 
 ---
 
-## How Discovery Works
+## Per-Agent vs Shared Skills
 
-At Gateway startup (and on hot-reload if `skills.load.watch` is enabled), OpenClaw scans each tier:
+In a single-agent setup you won't notice the distinction. In multi-agent setups, it matters.
 
-1. Walk the directory looking for subdirectories containing `SKILL.md`
-2. Parse the YAML frontmatter to extract `name`
-3. Run eligibility checks (`requires.bins`, `requires.env`, `requires.config`, `os`)
-4. Register the skill in an internal map keyed by `name`
+| Skill location | Visible to |
+|---------------|-----------|
+| `<workspace>/skills/` | That agent only |
+| `~/.openclaw/skills/` | All agents on this machine |
+| Bundled skills | All agents |
 
-```
-Scan order:
-  1. ~/.openclaw/workspace/skills/**/SKILL.md
-  2. ~/.openclaw/skills/**/SKILL.md
-  3. <openclaw-package>/skills/**/SKILL.md
-  + any paths in skills.load.extraDirs
-```
+Each agent has its own `workspace` directory (configured via `agents.list[].workspace`). Skills in that workspace are **per-agent** — the family agent and the personal agent can have different skill sets even on the same Gateway.
 
-### Extra Directories
-
-You can add additional scan paths via config:
+Example config:
 
 ```json5
 {
-  skills: {
-    load: {
-      extraDirs: [
-        "/home/me/work-skills",
-        "/shared/team-skills"
-      ]
-    }
+  agents: {
+    list: [
+      {
+        id: "personal",
+        workspace: "~/.openclaw/workspace-personal"
+        // picks up workspace-personal/skills/
+      },
+      {
+        id: "work",
+        workspace: "~/.openclaw/workspace-work"
+        // picks up workspace-work/skills/
+      }
+    ]
   }
 }
 ```
 
-Extra directories are scanned **after** the three standard tiers but **before** bundled skills in the precedence order.
+Skills in `~/.openclaw/skills/` are shared — both agents see them.
 
 ---
 
-## Name Conflicts & Shadowing
+## Load-Time Gating
 
-Here's the critical rule:
+Not every discovered skill makes it into the system prompt. At session start, OpenClaw runs each skill through a gating check based on its `metadata.openclaw` frontmatter.
 
-> **When two skills share the same `name`, the higher-priority tier wins. The lower-priority skill is completely invisible.**
+A skill is **eligible** if:
+- `always: true` is set, **or**
+- all `requires.bins` are present on `PATH`, **and**
+- all `requires.env` variables are set (or configured), **and**
+- all `requires.config` paths are truthy in `openclaw.json`, **and**
+- the current OS matches `os` (if specified)
 
-This is called **shadowing**. It's intentional and powerful — it lets you override bundled skills with your own version.
-
-### Example: Overriding the Bundled `oracle` Skill
-
-Say you want to customize how web search works. The bundled `oracle` skill lives deep inside the OpenClaw package. You can't (and shouldn't) edit it there. Instead:
-
-1. Create `~/.openclaw/workspace/skills/oracle/SKILL.md`
-2. Use `name: oracle` in the frontmatter
-3. Write your custom instructions
-
-Your workspace version **shadows** the bundled one completely. The agent never sees the original.
-
-```
-Bundled: oracle (SHADOWED — not loaded)
-Workspace: oracle ← This one wins
-```
-
-### Shadowing Table
-
-| Scenario | Winner | Loser |
-|----------|--------|-------|
-| Workspace `foo` + Managed `foo` | Workspace | Managed |
-| Workspace `foo` + Bundled `foo` | Workspace | Bundled |
-| Managed `foo` + Bundled `foo` | Managed | Bundled |
-| Workspace `foo` + Managed `foo` + Bundled `foo` | Workspace | Both others |
-
-### Detecting Shadows
-
-Use the CLI to see what's happening:
+If a skill fails any gate, it is silently skipped. The agent never knows it exists.
 
 ```bash
-# List all skills with their source tier
-openclaw skills list --verbose
-
-# Output shows:
-# NAME       SOURCE      STATUS     SHADOWED-BY
-# oracle     bundled     active     —
-# weather    workspace   active     —
-# spotify    managed     active     —
-# oracle     workspace   active     (shadows bundled:oracle)
+# See which skills passed and which were skipped
+openclaw hooks list --eligible
 ```
+
+This behavior is intentional: there's no point telling the agent it can use `peekaboo` if `peekaboo` isn't installed.
 
 ---
 
-## Eligibility vs Enabled
+## ClawHub: The Skill Registry
 
-A skill can be **ineligible** (requirements not met) or **disabled** (explicitly turned off). These are different:
+[ClawHub](https://clawhub.ai) is the public registry for OpenClaw skills. Install the CLI once:
 
-```mermaid
-graph TD
-    SKILL[Skill discovered] --> REQ{Requirements met?}
-    REQ -->|No| INELIGIBLE[❌ Ineligible<br/>Not shown to agent]
-    REQ -->|Yes| EN{Enabled in config?}
-    EN -->|No| DISABLED[⏸️ Disabled<br/>Not shown to agent]
-    EN -->|Yes| SHADOW{Shadowed by<br/>higher tier?}
-    SHADOW -->|Yes| SHADOWED[👻 Shadowed<br/>Not shown to agent]
-    SHADOW -->|No| ACTIVE[✅ Active<br/>Available to agent]
+```bash
+npm i -g clawhub
 ```
 
-### Disabling a Skill
+Then the common workflows:
+
+### Search
+
+```bash
+clawhub search "postgres backups"
+clawhub search "calendar"
+```
+
+ClawHub uses vector search — it understands synonyms and descriptions, not just keywords.
+
+### Install
+
+```bash
+clawhub install <skill-slug>
+```
+
+By default this installs into `./skills` under your current directory, falling back to the configured OpenClaw workspace. Start a new session and the skill is live.
+
+### Update
+
+```bash
+clawhub update <skill-slug>
+clawhub update --all
+```
+
+### Publish your own skill
+
+```bash
+clawhub login
+clawhub publish ./skills/my-skill --slug my-skill --name "My Skill" --version 1.0.0 --tags latest
+```
+
+### Sync (scan + publish)
+
+If you have multiple skills to back up or publish:
+
+```bash
+clawhub sync --all
+```
+
+This scans your skills directory, compares each skill to the registry by content hash, and offers to publish anything that's new or changed.
+
+---
+
+## Config Overrides
+
+Even bundled skills can be toggled or configured without touching their files:
 
 ```json5
 {
   skills: {
     entries: {
-      "some-skill": { enabled: false }
+      "peekaboo": { enabled: true },
+      "sag": { enabled: false },
+      "nano-banana-pro": {
+        enabled: true,
+        apiKey: "your-gemini-key-here",
+        env: {
+          GEMINI_API_KEY: "your-gemini-key-here"
+        }
+      }
     }
   }
 }
 ```
 
-Or via CLI:
+Rules:
+- `enabled: false` disables the skill even if it's bundled and installed
+- `apiKey` is a shorthand for skills that declare `metadata.openclaw.primaryEnv` — it maps to that env variable
+- `env` injects environment variables for the duration of the agent run only (scoped, not global)
+- `config` holds custom per-skill config values (skill-specific keys live here)
 
-```bash
-openclaw skills disable some-skill
-```
-
-### Allowlisting Bundled Skills
-
-If you only want specific bundled skills, use `allowBundled`:
-
-```json5
-{
-  skills: {
-    allowBundled: ["oracle", "weather"]
-    // All other bundled skills are excluded
-  }
-}
-```
-
-This is useful when you want a minimal agent with only the capabilities you've explicitly chosen.
+> **Env injection is scoped.** When the agent run ends, the original environment is restored. Your shell stays clean.
 
 ---
 
-## ClawHub: The Skills Registry
+## Skills Watcher (Hot Reload)
 
-[ClawHub](https://clawhub.ai) is the public registry for community-built skills. Think npm for OpenClaw skills.
+By default, OpenClaw watches skill folders for changes. When you edit a `SKILL.md`, the skill snapshot is refreshed before the next agent turn — no Gateway restart needed.
 
-### Installing from ClawHub
-
-```bash
-# Install the ClawHub CLI
-npm i -g clawhub
-
-# Search for skills
-clawhub search "calendar"
-
-# Install a skill (goes to ./skills/ or ~/.openclaw/skills/)
-clawhub install @someone/calendar-skill
-
-# Update all managed skills
-clawhub update --all
-
-# List installed skills
-clawhub list
-```
-
-### Where ClawHub Installs
-
-By default, `clawhub install` places skills in the **current directory's** `skills/` folder. If you're in your workspace, they become workspace skills. If you want them managed (shared across workspaces), specify the path:
-
-```bash
-clawhub install @someone/calendar-skill --dir ~/.openclaw/skills/
-```
-
-### Publishing Your Own
-
-```bash
-cd my-awesome-skill/
-clawhub publish
-```
-
-ClawHub enforces:
-- Valid `SKILL.md` with required frontmatter fields
-- 50MB maximum bundle size
-- Path sanitization (no `../` escapes)
-- Pattern-based moderation scans
-
----
-
-## Skill Loading at Runtime
-
-When a conversation turn begins, the agent sees skills in two phases:
-
-### Phase 1: Available Skills List
-
-All eligible, enabled, non-shadowed skills appear as a compact list in the system prompt:
-
-```xml
-<available_skills>
-  <skill name="oracle">Search the web and fetch page content
-    Load when: The user asks about current events or needs web info</skill>
-  <skill name="weather">Get weather conditions and forecasts
-    Load when: The user asks about weather or temperature</skill>
-  <skill name="spotify">Control Spotify playback
-    Load when: The user asks about music or playlists</skill>
-</available_skills>
-```
-
-This is cheap — just ~97 characters per skill entry.
-
-### Phase 2: Full Skill Loading
-
-When the agent decides a skill is relevant (based on `read_when` and context), it "reads" the full SKILL.md body. The instructions are then injected into the active context for that turn.
-
-This two-phase approach keeps the base context lean while still giving the agent access to detailed instructions when needed.
-
----
-
-## Hot Reloading
-
-If `skills.load.watch` is enabled, the Gateway watches for changes to SKILL.md files:
+Configure the watcher:
 
 ```json5
 {
   skills: {
     load: {
-      watch: true   // Default: false
+      watch: true,
+      watchDebounceMs: 250
     }
   }
 }
 ```
 
-When a SKILL.md is created, modified, or deleted:
-1. The skill is re-parsed
-2. Eligibility is re-checked
-3. The internal skill map is updated
-4. New sessions pick up the change immediately
-
-Existing sessions continue with their loaded skills until the next session reset.
+This is how iterating on a custom skill works in practice:
+1. Edit the `SKILL.md`
+2. Ask the agent something that triggers it
+3. The agent reads the updated instructions
 
 ---
 
-## Debugging Skill Loading Issues
+## Skill Lifecycle
 
-Common problems and how to diagnose them:
+The session snapshot is locked when a session **starts**. Changes mid-session aren't picked up until the next new session starts — except for the watcher refresh path, which bumps the snapshot before the next turn.
 
-| Symptom | Likely cause | Fix |
-|---------|-------------|-----|
-| Skill doesn't appear in `skills list` | Missing `SKILL.md` or wrong directory | Check path with `ls <workspace>/skills/<name>/SKILL.md` |
-| Skill shows as "ineligible" | Missing binary, env var, or config | Run `openclaw skills check` for details |
-| Skill loaded but agent ignores it | `read_when` doesn't match context | Rephrase `read_when` to be broader |
-| Wrong version of skill loading | Name shadowing | Run `openclaw skills list --verbose` to check |
-| Skill changes not taking effect | Hot reload disabled | Set `skills.load.watch: true` or restart Gateway |
+```mermaid
+sequenceDiagram
+    participant GW as Gateway
+    participant FS as File System
+    participant SESS as Session
+
+    GW->>FS: Scan skill directories
+    GW->>GW: Filter eligible skills (gating check)
+    GW->>SESS: Snapshot injected into system prompt
+
+    Note over GW,SESS: Session is locked to this snapshot
+
+    FS-->>GW: SKILL.md changed (watcher fires)
+    GW->>GW: Re-evaluate eligibility
+    GW->>SESS: Refresh snapshot (next turn only)
+```
+
+---
+
+## Security: Treat Third-Party Skills as Code
+
+Skills are instructions to the agent. A malicious `SKILL.md` could instruct the agent to do almost anything. Before installing a skill from ClawHub or anywhere else:
+
+- **Read the SKILL.md** before enabling it. It's plain text.
+- Prefer skills from authors you recognize or that have community activity.
+- Skills can be gated to require your explicit `enabled: true` in config before they load.
+- ClawHub requires a GitHub account at least one week old to publish. Skills with >3 unique reports are auto-hidden.
+
+When in doubt, review the full skill directory contents. The instructions are always visible — there's no compiled code, no binaries, just markdown.
 
 ---
 
 ## Summary
 
-| Concept | Details |
-|---------|---------|
-| **Three tiers** | Workspace > Managed > Bundled |
-| **Shadowing** | Same-name skills: higher tier wins completely |
-| **Eligibility** | Requirements (bins, env, config, os) must all pass |
-| **Enabled/disabled** | Config toggle via `skills.entries.<name>.enabled` |
-| **ClawHub** | Public registry — `clawhub install/search/publish` |
-| **Two-phase loading** | Compact listing first, full instructions on demand |
-| **Hot reload** | `skills.load.watch: true` for live updates |
+| Concept | Detail |
+|---------|--------|
+| Precedence | workspace > managed > bundled > extraDirs |
+| Per-agent | `<workspace>/skills/` — visible to one agent only |
+| Shared | `~/.openclaw/skills/` — visible to all agents |
+| Gating | `metadata.openclaw.requires` — skips ineligible skills silently |
+| ClawHub | Public registry: `clawhub install/update/publish/search` |
+| Config override | `skills.entries.<name>.enabled/apiKey/env/config` |
+| Hot reload | Skills watcher refreshes on next turn after SKILL.md changes |
 
 ---
 
-> **Exercise:**
-> 1. Run `openclaw skills list --verbose` and note which skills are bundled vs managed vs workspace
-> 2. Pick a bundled skill and create a workspace override: copy its `SKILL.md` to `~/.openclaw/workspace/skills/<name>/SKILL.md`, modify the description, and verify the shadow with `openclaw skills list --verbose`
-> 3. After testing, delete your override so the bundled version takes over again
-
----
-
-In the next lesson, we'll explore **hooks and workspace files** — the automation layer that lets your agent run scheduled tasks, respond to events, and maintain persistent state.
+> **Exercise:** Install a skill from ClawHub (if you don't have one yet), then check what OpenClaw loaded:
+> ```bash
+> clawhub search "weather"
+> clawhub install weather
+> openclaw hooks list --eligible  # or restart and check the session
+> ```
+> Then look at the lock file that records what's installed:
+> ```bash
+> cat .clawhub/lock.json
+> ```

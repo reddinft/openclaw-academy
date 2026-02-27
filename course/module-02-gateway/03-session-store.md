@@ -1,319 +1,250 @@
-# Session Store
+# Session store
 
-Sessions are OpenClaw's unit of **conversation continuity**. Every message you send, every tool call the agent makes, every response it generates — it all lands in a session. Understanding how sessions are stored, keyed, and maintained is essential for debugging, migration, and keeping your setup healthy.
+Sessions are how OpenClaw remembers who you are and what you talked about. Each conversation gets its own session — a unique key, a transcript file on disk, and metadata tracking token counts and timestamps.
 
----
-
-## What Is a Session?
-
-A session is:
-- A **unique key** that identifies a conversation context
-- A **JSONL transcript file** containing the full conversation history
-- **Metadata** (token count, last updated, channel origin) tracked in a registry
-
-There's no database. No Redis. No PostgreSQL. Sessions are **files on disk** — fast, simple, and inspectable with any text editor.
-
-```
-~/.openclaw/agents/main/sessions/
-├── sessions.json                  ← Session registry (metadata)
-├── ses_a1b2c3d4e5f6.jsonl       ← Transcript: your main DM conversation
-├── ses_f7e8d9c0b1a2.jsonl       ← Transcript: a Telegram group
-└── ses_1234567890ab.jsonl        ← Transcript: a Discord channel
-```
+This isn't a database. It's a disciplined set of files that the Gateway reads and writes directly.
 
 ---
 
-## Session Keys
+## What is a session?
 
-Every conversation maps to a **session key** — a deterministic string that decides which transcript file to use.
+A session is the unit of **conversation continuity**. Every time you send a message from a particular chat (a Telegram DM, a Discord channel, a WhatsApp group), OpenClaw maps it to a session:
 
-### Key format
+- A **unique session key** — a string that identifies this conversation
+- A **JSONL transcript file** — every message, tool call, and tool result, in order
+- **Metadata** — token counts, creation time, last updated timestamp, channel origin
 
-```
-agent:<agentId>:<channel>:<type>:<id>
-```
-
-| Segment | Meaning | Examples |
-|---------|---------|---------|
-| `agentId` | Which agent brain | `main`, `work`, `coding` |
-| `channel` | Source platform | `telegram`, `discord`, `whatsapp`, `slack` |
-| `type` | Chat type | `dm`, `group`, `channel` |
-| `id` | Platform-specific ID | Telegram user ID, Discord channel ID, WhatsApp group JID |
-
-### DMs collapse to main
-
-Here's the crucial design decision: **all direct messages collapse into one session per agent**, regardless of which channel they come from.
-
-```
-WhatsApp DM  →  agent:main:main
-Telegram DM  →  agent:main:main
-Discord DM   →  agent:main:main
-WebChat      →  agent:main:main
-```
-
-This means your Telegram conversation and your WhatsApp conversation share the same context. The agent remembers what you said on WhatsApp when you message it on Telegram. It's one brain, one memory.
-
-### Groups stay isolated
-
-Group conversations get their own session keys:
-
-```
-Telegram group -1001234567890     →  agent:main:telegram:group:-1001234567890
-Discord channel 222222222222      →  agent:main:discord:channel:222222222222222222
-WhatsApp group 120363...@g.us     →  agent:main:whatsapp:group:120363...@g.us
-```
-
-### Threads
-
-Some platforms support threads, which create sub-sessions:
-
-```
-Slack thread   →  agent:main:slack:channel:C123456:thread:1234567890
-Discord thread →  agent:main:discord:channel:123456:thread:987654
-Telegram topic →  agent:main:telegram:group:-1001234567890:topic:42
-```
+Sessions don't expire automatically. A conversation you had six months ago is still accessible if the transcript is intact.
 
 ---
 
-## The JSONL Transcript
+## Session key format
 
-Each session has a **JSONL (JSON Lines) file** — one JSON object per line, appended sequentially. This is the full conversation transcript.
+Session keys follow a structured format:
 
-### Structure
-
-```jsonl
-{"role":"user","content":"What's the weather in Sydney?","timestamp":"2026-02-28T10:15:30.000Z"}
-{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"get_weather","input":{"location":"Sydney"}}],"timestamp":"2026-02-28T10:15:31.500Z"}
-{"role":"tool","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"{\"temp\":22,\"condition\":\"Partly cloudy\"}"}],"timestamp":"2026-02-28T10:15:32.200Z"}
-{"role":"assistant","content":"It's 22°C and partly cloudy in Sydney right now.","timestamp":"2026-02-28T10:15:33.800Z"}
+```
+agent:<agentId>:<mainKey>
 ```
 
-Each line has:
-- `role`: `user`, `assistant`, or `tool`
-- `content`: the message payload (string or structured array)
-- `timestamp`: when it was recorded
+The `mainKey` part encodes the channel, the type of conversation, and the participant ID:
 
-### Why JSONL?
-
-| Format | Append | Read last N | Human-readable | Corruption recovery |
-|--------|--------|-------------|----------------|-------------------|
-| SQLite | OK | Good | No | Hard |
-| Single JSON | Bad (rewrite all) | Bad (parse all) | Yes | Hard |
-| **JSONL** | **Great (append)** | **Great (tail)** | **Yes** | **Great (skip bad line)** |
-
-JSONL is the sweet spot for append-heavy conversational data:
-- **Append-only**: new messages just get appended, no rewriting
-- **Partial reads**: you can tail the last N lines without loading the whole file
-- **Corruption-resistant**: a bad line doesn't invalidate the rest of the file
-- **Inspectable**: open it in any editor, pipe it through `jq`
-
-### Inspecting transcripts
-
-```bash
-# Find your sessions
-ls ~/.openclaw/agents/main/sessions/*.jsonl
-
-# Read the last 5 messages from a transcript
-tail -5 ~/.openclaw/agents/main/sessions/ses_abc123.jsonl | jq .
-
-# Count messages in a session
-wc -l ~/.openclaw/agents/main/sessions/ses_abc123.jsonl
-
-# Find all tool calls
-grep '"tool_use"' ~/.openclaw/agents/main/sessions/ses_abc123.jsonl | jq .name
 ```
+telegram:dm:821071206          ← Telegram DM from user 821071206
+telegram:group:-1001234567890  ← Telegram group
+discord:channel:123456789      ← Discord channel
+whatsapp:dm:+15555550123       ← WhatsApp DM
+```
+
+So a full session key looks like:
+
+```
+agent:main:telegram:dm:821071206
+```
+
+This means: agent `main`, Telegram DM, peer `821071206`.
+
+> **Multi-agent note:** With multiple agents, the `agentId` part changes. If you have an agent called `work`, its DMs become `agent:work:telegram:dm:821071206`. Sessions are never shared between agents — isolation is built into the key.
 
 ---
 
-## The Session Registry
+## DM scope: controlling the main session
 
-`sessions.json` is the **metadata index** — it maps session keys to session IDs and tracks stats without parsing every transcript:
+The `dmScope` setting controls how direct messages are keyed. This is a powerful lever.
 
-```json
+| `dmScope` | Session key for DMs | Effect |
+|-----------|--------------------|-|
+| `main` (default) | `agent:<id>:main` | All DMs share one session. Consistent memory regardless of which channel you message from. |
+| `channel` | `agent:<id>:<channel>:dm:<peer>` | Per-channel isolation |
+| `peer` | `agent:<id>:peer:<peer>` | Per-sender isolation (same sender across different channels = same session) |
+| `channel-peer` | `agent:<id>:<channel>:dm:<peer>` | Per-channel and per-sender (fully isolated) |
+
+The default `main` scope means your Telegram DM and your WhatsApp DM both read from the same session. Usually what you want — the agent has continuous memory regardless of which app you message from.
+
+Configure it in your `openclaw.json`:
+
+```json5
 {
-  "sessions": {
-    "agent:main:main": {
-      "id": "ses_a1b2c3d4e5f6",
-      "tokenCount": 15432,
-      "lastUpdated": "2026-02-28T10:15:33.800Z",
-      "channel": "telegram",
-      "compactions": 2,
-      "memoryFlushDone": true
-    },
-    "agent:main:telegram:group:-1001234567890": {
-      "id": "ses_f7e8d9c0b1a2",
-      "tokenCount": 3200,
-      "lastUpdated": "2026-02-27T18:30:00.000Z",
-      "channel": "telegram"
+  agents: {
+    defaults: {
+      session: {
+        dmScope: "main"   // main | channel | peer | channel-peer
+      }
     }
   }
 }
 ```
 
-Key fields:
-
-| Field | Purpose |
-|-------|---------|
-| `id` | The session ID (maps to transcript filename) |
-| `tokenCount` | Estimated token usage (for compaction decisions) |
-| `lastUpdated` | Timestamp of last activity |
-| `channel` | Originating channel |
-| `compactions` | Number of compaction passes performed |
-| `memoryFlushDone` | Whether pre-compaction memory flush has run |
-
 ---
 
-## Session Lifecycle
+## Where sessions live on disk
 
-```mermaid
-flowchart LR
-    A[Message arrives] --> B{Session exists?}
-    B -->|Yes| C[Load transcript]
-    B -->|No| D[Create session<br/>New JSONL file]
-    D --> C
-    C --> E[Agent turn<br/>Append messages]
-    E --> F{Near context limit?}
-    F -->|No| G[Done — session updated]
-    F -->|Yes| H[Memory flush<br/>then compact]
-    H --> G
-```
-
-1. **Creation**: first message to a new key creates the session entry and JSONL file
-2. **Growth**: each turn appends user message, assistant response, and any tool calls
-3. **Compaction**: when token count approaches the model's context window, older history is summarized (see Module 4)
-4. **Reset**: `/new` or `/reset` starts a fresh session ID for the same key
-
----
-
-## Session Management Commands
-
-### List sessions
-
-```bash
-openclaw sessions list
-```
-
-Shows active sessions with their keys, token counts, and last activity.
-
-### View history
-
-```bash
-openclaw sessions history --session "agent:main:main" --limit 10
-```
-
-### Reset a session
-
-In chat, send:
-```
-/new          ← Start a fresh session (new ID, same key)
-/reset        ← Same as /new
-```
-
-Via CLI:
-```bash
-openclaw sessions reset --session "agent:main:main"
-```
-
-This doesn't delete the old transcript — it creates a new session ID for the key. The old JSONL file remains on disk.
-
----
-
-## Pruning and Maintenance
-
-Over time, session files accumulate. Here's how to keep things tidy.
-
-### Disk usage
-
-Each message is typically 100-500 bytes in JSONL. A busy session with 1000 turns might be 200KB-1MB. Tool results (especially `exec` output) can inflate this significantly.
-
-Check your disk usage:
-
-```bash
-du -sh ~/.openclaw/agents/*/sessions/
-```
-
-### Session pruning vs compaction
-
-These are often confused. They're different operations:
-
-| Operation | What it does | Persistent? | When it runs |
-|-----------|-------------|-------------|-------------|
-| **Compaction** | Summarizes old messages into a compact entry | Yes (written to JSONL) | Near context limit |
-| **Session pruning** | Trims old tool results in-memory before LLM call | No (transient) | Each LLM request |
-
-**Compaction** is a lossy summarization that permanently changes the transcript. **Pruning** is a temporary optimization that keeps the on-disk transcript intact while reducing what gets sent to the model.
-
-### Manual cleanup
-
-To remove old sessions entirely:
-
-```bash
-# List sessions to find stale ones
-openclaw sessions list
-
-# Delete a specific session's transcript
-rm ~/.openclaw/agents/main/sessions/ses_oldone.jsonl
-```
-
-> **Caution:** Don't delete `sessions.json` — it's the registry. If you need to clean it up, use `openclaw doctor` which validates the registry against existing transcript files.
-
-### Transcript integrity
-
-`openclaw doctor` checks for:
-- Session entries with **missing transcript files** (warns about data loss)
-- **Main transcript with only 1 line** (history not accumulating)
-- **Permission issues** on session directories
-- **Multiple state directories** (split history across installs)
-
----
-
-## Session Storage Paths
-
-All session data lives under the agent's state directory:
+All session data lives under `~/.openclaw/`:
 
 ```
 ~/.openclaw/
 └── agents/
-    ├── main/
-    │   └── sessions/
-    │       ├── sessions.json
-    │       └── *.jsonl
-    ├── work/
-    │   └── sessions/
-    │       ├── sessions.json
-    │       └── *.jsonl
-    └── coding/
+    └── main/
         └── sessions/
-            ├── sessions.json
-            └── *.jsonl
+            ├── sessions.json          ← Session registry (key → session ID + metadata)
+            └── <SessionId>.jsonl      ← Conversation transcript (one message per line)
 ```
 
-Each agent gets **fully isolated sessions**. The `main` agent's sessions never mix with the `work` agent's sessions — even if the same Telegram message could reach either one (routing determines which agent handles it).
+### The session registry (`sessions.json`)
 
-You can override the session store path via `session.store` in your config, with `{agentId}` templating for per-agent paths.
+A JSON file mapping session keys to session IDs and metadata:
+
+```json
+{
+  "agent:main:main": {
+    "sessionId": "ses_abc123",
+    "sessionKey": "agent:main:main",
+    "createdAt": "2026-01-15T10:00:00Z",
+    "updatedAt": "2026-02-27T08:30:00Z",
+    "tokenCount": 48523,
+    "channel": "telegram"
+  }
+}
+```
+
+The Gateway looks up this registry every time a message arrives to find the right transcript file.
+
+### The transcript (`<SessionId>.jsonl`)
+
+Each line in the `.jsonl` file is one event in the conversation:
+
+```jsonl
+{"role":"user","content":"What's the weather in Sydney?","timestamp":"2026-02-27T08:30:00.000Z"}
+{"role":"assistant","content":[{"type":"tool_use","id":"toolu_01","name":"get_weather","input":{"location":"Sydney"}}],"timestamp":"2026-02-27T08:30:01.000Z"}
+{"role":"user","content":[{"type":"tool_result","tool_use_id":"toolu_01","content":"{\"temp\":22}"}],"timestamp":"2026-02-27T08:30:02.000Z"}
+{"role":"assistant","content":"It's 22°C in Sydney right now.","timestamp":"2026-02-27T08:30:03.000Z"}
+```
+
+JSONL (JSON Lines) is one JSON object per line, plain text. You can read it with any text editor, `cat`, or `jq`.
 
 ---
 
-## Environment Variables
+## Session lifecycle
 
-| Variable | Effect |
-|----------|--------|
-| `OPENCLAW_STATE_DIR` | Moves the entire state directory (sessions, config, creds) |
-| `OPENCLAW_HOME` | Base for internal paths |
-| `OPENCLAW_CONFIG_PATH` | Override config file location |
+### Creation
 
-> **Key Takeaway:** OpenClaw's session store is beautifully simple — JSONL files indexed by a JSON registry. No database to manage, no migrations to run, no connection strings to configure. But that simplicity means **you** are responsible for backups. Consider putting your `~/.openclaw/` directory under version control or syncing it to a backup target.
+When a message arrives with no existing session:
+1. Gateway generates a new `sessionId`
+2. Creates an entry in `sessions.json`
+3. Creates a new empty `.jsonl` file
+4. First agent turn injects workspace bootstrap files (AGENTS.md, SOUL.md, etc.) into the system prompt
+
+### Active use
+
+Each turn:
+1. Gateway reads the transcript into memory
+2. Agent processes the turn (LLM call, tool calls)
+3. New messages appended to the `.jsonl` file
+4. Token count updated in `sessions.json`
+
+Sessions are read from disk once per session and held in memory while active. There's no per-turn file I/O after the initial load.
+
+### Compaction
+
+When the transcript grows large enough to approach the model's context window limit, **auto-compaction** triggers:
+
+1. A summary of the older history is written
+2. Older messages are replaced with the summary in memory
+3. The transcript on disk is updated with the compacted form
+4. A `compaction` event is emitted on the WebSocket stream
+
+Compaction is automatic and transparent. The agent keeps working; it just has summarized history instead of verbatim history.
+
+Configure compaction behavior:
+
+```json5
+{
+  agents: {
+    defaults: {
+      compaction: {
+        mode: "safeguard",           // default | safeguard (chunked for long histories)
+        reserveTokensFloor: 24000,   // minimum headroom before compaction triggers
+        memoryFlush: {
+          enabled: true,             // run a memory-flush turn before compacting
+          softThresholdTokens: 6000,
+          prompt: "Write any lasting notes to memory/YYYY-MM-DD.md; reply NO_REPLY if nothing to store."
+        }
+      }
+    }
+  }
+}
+```
+
+The `memoryFlush` feature triggers a silent agent turn _before_ compaction, giving the agent a chance to write important information to its memory files before the history is summarized.
+
+### Session commands
+
+From any chat, you can manage sessions directly:
+
+| Command | Effect |
+|---------|--------|
+| `/new` | Start a fresh session (creates a new session ID) |
+| `/reset` | Clear the current session (keeps the key, empties the transcript) |
+| `/sessions` | List available sessions |
+| `/session <key>` | Switch to a different session |
 
 ---
 
-## Exercises
+## Inspecting sessions manually
 
-1. **Explore your sessions**: Run `openclaw sessions list` and find your most active session. Open the corresponding JSONL file and read through a few turns. Notice how tool calls and results are structured.
+Since sessions are plain files, you can inspect them directly:
 
-2. **Calculate session size**: Pick a session and count lines (`wc -l`), check file size (`ls -lh`), and note the `tokenCount` from `sessions.json`. What's the relationship between file size and token count?
+```bash
+# See all sessions for the main agent
+ls ~/.openclaw/agents/main/sessions/
 
-3. **Trace a key**: Send a message from Telegram and a message from WhatsApp. Do they end up in the same session? Check `sessions.json` to verify. Now send a message in a Telegram group — what session key does it get?
+# Read the session registry
+cat ~/.openclaw/agents/main/sessions/sessions.json | jq .
+
+# Read a transcript (last 20 lines)
+tail -20 ~/.openclaw/agents/main/sessions/<SessionId>.jsonl | jq .
+
+# Count messages in a transcript
+wc -l ~/.openclaw/agents/main/sessions/<SessionId>.jsonl
+
+# Find all assistant messages
+cat ~/.openclaw/agents/main/sessions/<SessionId>.jsonl | jq 'select(.role == "assistant") | .content'
+```
 
 ---
 
-In the next lesson, we'll explore the **Configuration System** — JSON5 schema, validation, and the art of `openclaw doctor`.
+## Session security and isolation
+
+By default, sessions only include messages from approved senders. The Gateway's allowlist/pairing system ensures that only trusted senders can contribute to a session.
+
+For group chats:
+- Messages from non-approved members are filtered out before reaching the session
+- The agent only sees messages from approved participants
+
+For multi-agent setups, session isolation is enforced at the key level — there's no way for one agent's session to accidentally read another's transcript.
+
+---
+
+## Summary
+
+| Concept | Detail |
+|---------|--------|
+| Session key | `agent:<agentId>:<mainKey>` — structured, deterministic |
+| dmScope | Controls how DM keys are composed (default: `main` = all DMs share one session) |
+| Storage | `~/.openclaw/agents/<id>/sessions/` — plain files, no database |
+| Registry | `sessions.json` — key → sessionId + metadata |
+| Transcript | `<SessionId>.jsonl` — one event per line |
+| Compaction | Automatic when context window fills; optional memory-flush before compaction |
+
+---
+
+> **Exercise:** Explore your own session transcripts.
+> 1. Run `ls ~/.openclaw/agents/main/sessions/` to see your session files
+> 2. Run `cat ~/.openclaw/agents/main/sessions/sessions.json | python3 -m json.tool` to see the session registry
+> 3. Pick a `.jsonl` file and open it — read a few lines and identify the `role` of each entry
+> 4. Count how many turns are in your main session: `wc -l ~/.openclaw/agents/main/sessions/<id>.jsonl`
+>
+> **Bonus:** Use `jq` to extract just the assistant messages: `cat <file>.jsonl | jq -r 'select(.role=="assistant") | .content | if type == "string" then . else .[0].text // "tool_use" end'`
+
+---
+
+The next lesson covers the configuration system — what's in `openclaw.json`, how sections are organized, and how to validate your config with `openclaw doctor`.

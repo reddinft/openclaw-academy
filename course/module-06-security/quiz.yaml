@@ -1,14 +1,108 @@
-id: mmodule-quiz
-title: "Module module Quiz"
+id: m06-quiz
+title: "Module 6 Quiz: Security Model"
 passing_score: 70
 questions:
   - id: q1
-    text: "Quiz questions for this module are coming soon."
+    text: "Which trust level carries the highest authority in OpenClaw's trust hierarchy?"
     type: single_choice
     options:
       - id: a
-        text: "Coming soon"
+        text: "User messages — the user is the operator"
       - id: b
-        text: "Stay tuned"
-    correct: a
-    explanation: "This module's quiz is still being written. Check back after the lesson content is complete."
+        text: "External content — it comes from authoritative web sources"
+      - id: c
+        text: "The system prompt (composed from workspace files) — controlled by the gateway owner"
+      - id: d
+        text: "LLM responses — the model makes the final decision"
+    correct: c
+    explanation: "The trust hierarchy is: system prompt (highest) > workspace files > user messages > external content (lowest). The system prompt is composed by OpenClaw from workspace files that only the gateway owner can modify. User messages and fetched content sit below it."
+
+  - id: q2
+    text: "What is the EXTERNAL_UNTRUSTED_CONTENT XML wrapper used for?"
+    type: single_choice
+    options:
+      - id: a
+        text: "Encrypting external content before it's stored in the session transcript"
+      - id: b
+        text: "Tagging content fetched from the web or email as untrusted, so the model treats it as data rather than instructions"
+      - id: c
+        text: "Filtering out malicious content before it reaches the agent"
+      - id: d
+        text: "Marking content that requires user approval before the agent can read it"
+    correct: b
+    explanation: "The EXTERNAL_UNTRUSTED_CONTENT wrapper is an XML envelope applied to web_fetch results, search results, email bodies, and webhook payloads. It signals to the model that this content came from an untrusted third party and should be treated as data to summarize, not instructions to follow."
+
+  - id: q3
+    text: "An agent has exec in its tool deny list. An attacker sends a carefully crafted prompt injection through a fetched webpage instructing the agent to 'run rm -rf ~/Documents'. What happens?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The agent might follow the instruction if the injection is clever enough"
+      - id: b
+        text: "The exec tool is unavailable — the injection cannot call it regardless of what the model wants"
+      - id: c
+        text: "The Gateway logs the attempt and alerts the owner, but the command runs"
+      - id: d
+        text: "The sandbox intercepts the command and runs it safely in Docker"
+    correct: b
+    explanation: "Tool policy is a hard control. If exec is in the deny list, the tool doesn't appear in the agent's available tools. No matter how convincing the injection, the model literally cannot call a tool that doesn't exist. This is why tool policy is more reliable than prompt-level defenses."
+
+  - id: q4
+    text: "You set sandbox mode to 'non-main'. Your agent runs in a Telegram group chat. Is that session sandboxed?"
+    type: single_choice
+    options:
+      - id: a
+        text: "No — Telegram is a first-party channel and is always trusted"
+      - id: b
+        text: "No — 'non-main' only affects Discord and Slack channels"
+      - id: c
+        text: "Yes — group chat sessions use their own session keys, which are not the main session key"
+      - id: d
+        text: "Only if the group is not in the allowlist"
+    correct: c
+    explanation: "'non-main' mode sandboxes any session whose key is not the main session key. Group chat sessions have their own keys (e.g., agent:main:telegram:group:12345) — these are not main. So yes, group chat sessions are sandboxed in 'non-main' mode. Only the primary DM session (typically agent:main:main) runs unsandboxed."
+
+  - id: q5
+    text: "What is the DM pairing policy 'pairing' (the default) designed to prevent?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The agent from calling tools when talking to unknown senders"
+      - id: b
+        text: "Unknown strangers from reaching the agent until the owner explicitly approves them"
+      - id: c
+        text: "Multiple people from sharing the same session context"
+      - id: d
+        text: "The agent from using exec in DM conversations"
+    correct: b
+    explanation: "With dmPolicy: 'pairing', an unknown sender receives a one-time pairing code but their message is NOT processed. Only after the owner approves them (openclaw pairing approve) will their messages reach the agent. This ensures only explicitly approved people can trigger your bot."
+
+  - id: q6
+    text: "Prompt injection can only succeed if strangers can message your bot directly."
+    type: single_choice
+    options:
+      - id: a
+        text: "True — only inbound messages can contain injection attempts"
+      - id: b
+        text: "False — any content the agent reads can carry injections (web pages, emails, files, search results)"
+      - id: c
+        text: "True — the pairing system blocks all injection attempts from external sources"
+      - id: d
+        text: "False — only attachments can carry injections, not text content"
+    correct: b
+    explanation: "Prompt injection can arrive through any untrusted content the agent reads — not just direct messages. A webpage you ask it to summarize, an email processed by a hook, a search result, or a pasted file can all contain adversarial instructions. Pairing and allowlists reduce the sender surface but don't protect against content-based injection."
+
+  - id: q7
+    text: "What does the 'elevated full' exec mode do that 'elevated on' does not?"
+    type: single_choice
+    options:
+      - id: a
+        text: "It grants access to additional tools beyond exec"
+      - id: b
+        text: "It runs exec on the host AND bypasses exec approval prompts for the session"
+      - id: c
+        text: "It enables the sandbox to mount the full host filesystem"
+      - id: d
+        text: "It allows the agent to modify gateway configuration and tool policies"
+    correct: b
+    explanation: "Both 'elevated on' and 'elevated full' run exec on the host instead of in the sandbox. The difference: 'elevated full' additionally skips exec approval prompts for the session. Use 'full' only when you need unrestricted host access and have explicitly verified the context is safe. Neither grants additional tools — elevated only affects where exec runs."

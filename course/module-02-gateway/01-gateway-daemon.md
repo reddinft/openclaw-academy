@@ -1,341 +1,231 @@
-# The Gateway Daemon
+# The Gateway daemon
 
-The Gateway is a **long-lived Node.js process** — the beating heart of your OpenClaw setup. It owns every channel connection, every session, every agent loop. When it's running, your AI is alive. When it stops, everything stops.
-
-In this lesson, we'll look at how the Gateway starts, how it stays running, how to check its health, and where it puts its logs.
+The Gateway isn't a script you run once. It's a long-lived process — the control plane that holds your entire AI setup together. Know what it owns and the rest of this module falls into place.
 
 ---
 
-## Daemon Management: launchd and systemd
+## What is the Gateway?
 
-OpenClaw doesn't just run in a terminal tab — it installs itself as a **system service** so it survives reboots, crashes, and closed laptops.
+The Gateway is a **Node.js process** that runs continuously in the background on your machine. You start it once (usually at login, via a system service) and it stays alive indefinitely:
 
-| Platform | Supervisor | Service type |
-|----------|-----------|--------------|
-| macOS | launchd | User agent (`~/Library/LaunchAgents/`) |
-| Linux | systemd | User service (`~/.config/systemd/user/`) |
-| Windows | schtasks | Scheduled task (WSL2 recommended) |
+- Connections to messaging channels (Telegram, WhatsApp, Discord, etc.)
+- Conversation sessions for every user
+- The agent runtime that calls LLMs
+- Tool execution (shell commands, browser, file reads)
+- A WebSocket API for control clients (CLI, Web UI, macOS app)
 
-### Installing the daemon
+It lives at a single address:
 
-When you run onboarding, it offers to install the service for you:
-
-```bash
-openclaw onboard --install-daemon
+```
+ws://127.0.0.1:18789       ← WebSocket control plane
+http://127.0.0.1:18789/__openclaw__/canvas/  ← Canvas UI
 ```
 
-Or install it explicitly:
+> **Note:** The default port is `18789`. You can change it with `gateway.port` in your config, but most users never need to.
+
+No microservice mesh, no Redis, no PostgreSQL. Just Node.js and files.
+
+---
+
+## How the Gateway starts
+
+### macOS — launchd
+
+On macOS, OpenClaw installs a **launchd user agent**. It starts at login and restarts automatically if it crashes.
 
 ```bash
+# Install the service (done once during setup)
 openclaw gateway install
+
+# Manual control
+openclaw gateway start
+openclaw gateway stop
+openclaw gateway restart
+
+# Check status
+openclaw gateway status
 ```
 
-This writes a service definition that tells your OS to:
-1. Start the Gateway automatically on login/boot
-2. Restart it if it crashes
-3. Run it under your user account (not root)
-
-### macOS (launchd)
-
-On macOS, the service is a **LaunchAgent** — a plist file that launchd watches:
-
-```bash
-# View the installed plist
-cat ~/Library/LaunchAgents/ai.openclaw.gateway.plist
-
-# Manual start/stop (rarely needed)
-launchctl load ~/Library/LaunchAgents/ai.openclaw.gateway.plist
-launchctl unload ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+The launchd plist lives at:
+```
+~/Library/LaunchAgents/ai.openclaw.gateway.plist
 ```
 
-launchd will auto-restart the process if it exits unexpectedly. The `KeepAlive` flag ensures the Gateway comes back up after a crash.
+> **Warning:** Avoid using `launchctl restart` directly — use `openclaw gateway restart` instead, or `launchctl stop` + `launchctl start` with a sleep between them. The `restart` subcommand can race on some macOS versions.
 
-### Linux (systemd)
+### Linux — systemd
 
-On Linux, OpenClaw installs a **user-level systemd service**:
+On Linux, the Gateway installs as a **systemd user service**:
 
 ```bash
-# Check service status
+openclaw gateway install    # creates ~/.config/systemd/user/openclaw-gateway.service
 systemctl --user status openclaw-gateway
-
-# Restart
-systemctl --user restart openclaw-gateway
-
-# View logs
-journalctl --user -u openclaw-gateway -f
 ```
 
-One important gotcha: systemd user services only run while you're logged in — unless you enable **lingering**:
+On servers without a persistent login session, enable systemd "linger" so the service survives logout:
 
 ```bash
 loginctl enable-linger $USER
 ```
 
-`openclaw doctor` checks for this and will prompt you to fix it.
+`openclaw doctor` will warn you if linger isn't enabled.
+
+### Docker
+
+Running in a container? The Gateway starts with:
+
+```bash
+docker run -d \
+  -v ~/.openclaw:/root/.openclaw \
+  -p 18789:18789 \
+  openclaw/openclaw:latest
+```
+
+The Gateway process runs in the foreground inside the container; Docker/Compose manages restart policy.
 
 ---
 
-## The Startup Sequence
+## What the Gateway owns
 
-When the Gateway process starts, it follows a deterministic sequence. Understanding this helps you debug startup failures.
+The Gateway owns four domains:
 
 ```mermaid
-flowchart TD
-    A[Process starts] --> B[Load config<br/>~/.openclaw/openclaw.json]
-    B --> C{Config valid?}
-    C -->|No| D[Exit with error<br/>Run openclaw doctor]
-    C -->|Yes| E[Run auto-migrations<br/>legacy config keys]
-    E --> F[Bind WebSocket server<br/>default :18789]
-    F --> G{Port available?}
-    G -->|No| H[Exit: port collision<br/>Check for existing gateway]
-    G -->|Yes| I[Initialize channels<br/>Connect to each platform]
-    I --> J[Load agent workspaces<br/>Resolve skills]
-    J --> K[Start health monitor<br/>Begin accepting connections]
-    K --> L[Gateway ready]
+graph TB
+    GW["🏠 Gateway"]
+    
+    GW --> CH["📨 Channel Manager\n(WhatsApp, Telegram,\nDiscord, Slack, ...)"]
+    GW --> SS["📂 Session Store\n(JSONL transcripts,\nrouting state)"]
+    GW --> AR["🤖 Agent Runtime\n(pi-mono, LLM calls,\ntool execution)"]
+    GW --> WS["🔌 WebSocket API\n(CLI, Web UI,\nmacOS App, Nodes)"]
+
+    CH --> SS
+    SS --> AR
+    AR --> CH
 ```
 
-Let's walk through each phase:
+### 1. Channel Manager
 
-### 1. Config Load
+Each channel (Telegram, WhatsApp, Discord, etc.) has a **plugin** that handles the platform-specific protocol. The Channel Manager:
 
-The Gateway reads `~/.openclaw/openclaw.json` (JSON5 format). If it finds **legacy config keys** (from older versions), it auto-migrates them in-memory and writes the updated config back. This is the same migration that `openclaw doctor` performs manually.
+- Maintains persistent connections to each platform
+- Validates inbound senders (allowlist / pairing)
+- Normalizes messages into OpenClaw's internal `InboundMessage` format
+- Routes normalized messages to the Session Manager
+- Delivers outbound responses back to the platform
 
-### 2. WebSocket Bind
+### 2. Session Store
 
-The Gateway binds its WebSocket server to the configured port (default `18789`). This is the single control plane for all clients — CLI, macOS app, Web UI, iOS/Android nodes.
+Sessions are the unit of conversation continuity. The Gateway owns the mapping from `(channel, sender)` → `session key` → JSONL transcript file. Lesson 3 covers sessions in depth.
 
-```
-ws://127.0.0.1:18789
-```
+### 3. Agent Runtime
 
-If the port is already in use (another Gateway, an SSH tunnel, etc.), the process exits immediately. You can diagnose this with:
+The agent (built on **pi-mono**) calls the LLM and executes tools. The Gateway wraps pi-mono with:
 
-```bash
-openclaw doctor    # checks for port collisions
-lsof -i :18789    # see what's using the port
-```
+- Custom tool wiring (browser, canvas, nodes, cron, messaging tools)
+- Workspace bootstrap injection (AGENTS.md, SOUL.md, etc.)
+- Skill loading (bundled + managed + workspace skills)
+- Auto-compaction (context window management)
+- Memory flush (pre-compaction note-writing)
 
-### 3. Channel Initialization
+### 4. WebSocket API
 
-Each configured channel starts its connection:
-- **Telegram**: begins long-polling (or registers webhook)
-- **WhatsApp**: loads Baileys auth state, connects to WhatsApp Web
-- **Discord**: connects to Discord Gateway WebSocket
-- **Slack**: opens Socket Mode connection
-
-Channels that fail to connect don't crash the Gateway — they log errors and retry with exponential backoff.
-
-### 4. Agent + Skills
-
-Workspaces are resolved for each configured agent. Skills (bundled, managed, workspace) are loaded and snapshotted. Bootstrap context files (AGENTS.md, SOUL.md, etc.) are validated.
-
-### 5. Ready
-
-The Gateway is now accepting inbound messages and WebSocket connections. It writes a **gateway lock file** to prevent duplicate instances.
+The Gateway exposes a typed WebSocket API on port 18789. Control clients — the CLI, the Web UI, the macOS menu bar app, and paired mobile nodes — all connect here. Lesson 2 traces this protocol.
 
 ---
 
-## The Gateway Lock
+## The event loop: how a message becomes a response
 
-Only one Gateway should run per state directory. OpenClaw enforces this with a lock mechanism:
+When a message arrives, the Gateway processes it through a pipeline:
 
+```mermaid
+sequenceDiagram
+    participant CH as Channel Plugin
+    participant SESS as Session Manager
+    participant QUEUE as Run Queue
+    participant AGENT as Agent Runtime
+    participant LLM as LLM Provider
+
+    CH->>SESS: InboundMessage (normalized)
+    SESS->>SESS: Validate sender (pairing/allowlist)
+    SESS->>SESS: Resolve session key
+    SESS->>QUEUE: Enqueue agent run
+    QUEUE->>AGENT: Start turn (message + session context)
+    AGENT->>LLM: POST /messages (system prompt + history + tools)
+    LLM-->>AGENT: Response (text or tool_use)
+    AGENT->>AGENT: Execute tool calls (0 or more)
+    AGENT-->>SESS: Append turn to JSONL
+    AGENT-->>CH: Response payload
+    CH-->>CH: Deliver to channel
 ```
-~/.openclaw/gateway.lock
-```
 
-If a second Gateway process tries to start, it detects the lock and exits. If the lock is stale (from a crash), the new process reclaims it.
+Key properties of this pipeline:
 
-This is why you'll sometimes see "Gateway already running" — it's the lock doing its job. If you're sure nothing is running, `openclaw doctor` can help clean up a stale lock.
+- Runs are queued per session, not parallelized. Session 1 can run while Session 2 queues another turn, but no two turns for the same session overlap.
+- The transcript loads into memory once per session. No per-turn database queries.
+- Channel, session, agent, and tool all run in the same Node.js process. No inter-service network hops.
+
+### Queue modes
+
+When a new message arrives while a turn is running, the Gateway has three strategies:
+
+| Mode | Behavior |
+|------|----------|
+| `followup` | Hold the message until the current turn ends, then start a new turn |
+| `collect` | Collect multiple incoming messages and batch them into one turn |
+| `steer` | Inject the new message into the current running turn (after the next tool call) |
+
+The default is `followup`. Configure with `messages.queue.mode` in `openclaw.json`.
 
 ---
 
-## Health Checks
+## Crash recovery and restarts
 
-OpenClaw provides multiple ways to check Gateway health:
+The system service (launchd/systemd) acts as a supervisor:
 
-### Quick status
+- **Crash**: automatically restarts the Gateway after a brief delay
+- **On restart**: channels reconnect, sessions resume from their on-disk JSONL transcripts
+- **In-progress turns**: any turn running when the Gateway crashed is lost — the session is clean on restart, but the incomplete turn won't be replayed
 
-```bash
-openclaw status
-```
+This "stateless restart" behavior is by design. Sessions are durable (JSONL on disk). In-flight work is not. Design your workflows accordingly.
 
-This prints a local summary: Gateway reachability, channel auth age, session count, and recent activity. It doesn't probe the running Gateway process.
-
-### Full local diagnosis
-
-```bash
-openclaw status --all
-```
-
-Full local state read — safe to paste for debugging. Includes everything from `status` plus config details.
-
-### Deep probe
-
-```bash
-openclaw status --deep
-```
-
-This actually **connects to the running Gateway** via WebSocket and runs per-channel probes. Use this when something isn't working.
-
-### Health JSON
-
-```bash
-openclaw health --json
-```
-
-Asks the Gateway for a structured health snapshot — linked creds, per-channel probe summaries, session store status, probe duration. Exits non-zero if the Gateway is unreachable.
-
-### In-chat check
-
-Send `/status` as a message in WhatsApp or WebChat to get a status reply without invoking the agent.
-
-| Command | What it does | Connects to Gateway? |
-|---------|-------------|---------------------|
-| `openclaw status` | Local state summary | No |
-| `openclaw status --all` | Full local diagnosis | No |
-| `openclaw status --deep` | Per-channel probes | Yes (WebSocket) |
-| `openclaw health --json` | Structured health snapshot | Yes (WebSocket) |
-| `/status` in chat | In-band status reply | Yes (via channel) |
+> **Tip:** If the Gateway seems stuck, `openclaw gateway restart` is always safe. Sessions survive the restart.
 
 ---
 
-## Log Locations
+## Gateway health
 
-OpenClaw has two log surfaces — understanding where to look saves hours of debugging.
-
-### File Logs (JSON lines)
+Check that everything is running:
 
 ```bash
-# Default location — one file per day
-/tmp/openclaw/openclaw-YYYY-MM-DD.log
+openclaw gateway status        # running/stopped + port
+openclaw channels status       # connection state per channel
+openclaw doctor                # full health + config audit
 ```
 
-Each line is a JSON object. Dates follow the gateway host's local timezone.
-
-Tail them live:
-
-```bash
-openclaw logs --follow
-```
-
-Or from the Control UI: the Logs tab tails this file via the Gateway's `logs.tail` WebSocket method.
-
-### Console Output
-
-What you see in the terminal when running `openclaw gateway` directly. This is formatted for humans — colored, prefixed by subsystem.
-
-```
-[gateway]       Gateway listening on ws://127.0.0.1:18789
-[telegram]      Bot connected: @your_bot
-[whatsapp]      Session restored from disk
-[agent/main]    Workspace loaded: ~/.openclaw/workspace
-```
-
-### Configuring Log Levels
-
-```json5
-{
-  logging: {
-    level: "info",           // File log level: trace | debug | info | warn | error
-    file: "/tmp/openclaw/",  // Log directory
-    consoleLevel: "info",    // Console verbosity (independent of file)
-    consoleStyle: "pretty",  // pretty | compact | json
-  },
-}
-```
-
-Key insight: `--verbose` on the CLI only affects **console verbosity** — it does not change the file log level. If you need verbose details in file logs, set `logging.level` to `debug` or `trace`.
-
-### Verbose Mode
-
-Run the Gateway with verbose output to see all WebSocket traffic:
-
-```bash
-# See all WS request/response traffic (compact format)
-openclaw gateway --verbose --ws-log compact
-
-# See all WS traffic with full metadata
-openclaw gateway --verbose --ws-log full
-```
-
-Without `--verbose`, the Gateway only prints "interesting" events: errors, slow calls (>=50ms), and parse errors.
+`openclaw doctor` is the comprehensive health check tool — it validates config, checks for stale state, migrates legacy formats, and warns about security issues. Run it whenever something seems off or after an upgrade.
 
 ---
 
-## Graceful Shutdown and Restart
+## Summary
 
-### In-place restart
-
-The Gateway supports **in-place restart** via `SIGUSR1`. This is what happens when you run:
-
-```bash
-openclaw gateway restart
-```
-
-The process tears down channels, reloads config, and reinitializes — without losing the PID or the service supervisor connection.
-
-### Graceful shutdown
-
-On `SIGTERM` or `SIGINT`, the Gateway:
-1. Stops accepting new messages
-2. Waits for in-flight agent turns to complete (with a timeout)
-3. Closes channel connections
-4. Releases the gateway lock
-5. Exits cleanly
-
-The service supervisor (launchd/systemd) then decides whether to restart based on its configuration.
+| Aspect | Detail |
+|--------|--------|
+| Runtime | Long-lived Node.js process |
+| Startup | launchd (macOS), systemd (Linux), Docker |
+| Port | `18789` (WebSocket + HTTP) |
+| State | `~/.openclaw/` (files, no database) |
+| Crash recovery | Supervisor restarts; sessions resume from JSONL |
+| Concurrency | Serialized per session, global concurrency via `maxConcurrent` |
 
 ---
 
-## openclaw doctor
-
-`openclaw doctor` is your first-line diagnostic and repair tool. Run it whenever something feels off.
-
-```bash
-openclaw doctor           # Interactive — prompts for fixes
-openclaw doctor --yes     # Accept default repairs
-openclaw doctor --repair  # Apply repairs without prompting
-openclaw doctor --deep    # Scan for extra gateway installs
-```
-
-What it checks:
-
-| Check | What it does |
-|-------|-------------|
-| Config normalization | Migrates legacy keys to current schema |
-| State integrity | Verifies sessions, transcripts, permissions |
-| Model auth health | Checks OAuth expiry, refreshes tokens |
-| Sandbox images | Validates Docker images if sandboxing enabled |
-| Service config | Audits launchd/systemd for missing defaults |
-| Port collisions | Checks if `18789` is already in use |
-| Channel probes | Tests connectivity on each enabled channel |
-| Security warnings | Flags open DM policies, missing auth tokens |
-| Runtime checks | Warns about Bun usage, version-manager paths |
-
-> **Key Takeaway:** `openclaw doctor` is not just a diagnostic — it actively repairs. Legacy configs, stale state, missing service files, expired OAuth tokens — it handles all of it. Make it your first reflex when troubleshooting.
+> **Exercise:** Check your Gateway is running and healthy.
+> 1. Run `openclaw gateway status` — confirm it shows "running"
+> 2. Run `openclaw channels status` — see which channels are connected
+> 3. Run `openclaw doctor` — read any warnings it surfaces
+>
+> If the Gateway isn't running, start it with `openclaw gateway start`.
 
 ---
 
-## Common Startup Issues
-
-| Symptom | Likely cause | Fix |
-|---------|-------------|-----|
-| "Port 18789 already in use" | Another Gateway or SSH tunnel | `lsof -i :18789` then kill the occupant |
-| "Config validation failed" | Bad JSON5 or unknown keys | `openclaw doctor` to migrate/fix |
-| Gateway starts but no channel messages | Channel not configured or auth expired | `openclaw status --deep` to probe |
-| "Service not running" after reboot | systemd linger not enabled (Linux) | `loginctl enable-linger $USER` |
-| WhatsApp "logged out" | Session expired or 515 error | `openclaw channels logout && openclaw channels login` |
-
----
-
-## Exercises
-
-1. **Check your daemon status**: Run `openclaw status --all` and identify which channels are connected and what agent(s) are configured. Note the Gateway port and session count.
-
-2. **Read the file logs**: Open today's log file at `/tmp/openclaw/openclaw-YYYY-MM-DD.log`. Find a `web-inbound` entry and trace the corresponding response. How many tool calls did the agent make?
-
-3. **Run doctor**: Execute `openclaw doctor` and review each check it performs. Note any warnings or migrations it offers.
-
----
-
-In the next lesson, we'll dig into the **WebSocket protocol** — the wire format that every client speaks to communicate with the Gateway.
+The next lesson covers the WebSocket protocol — how clients connect to the Gateway and what the message framing looks like.

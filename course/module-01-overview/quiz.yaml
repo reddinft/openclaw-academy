@@ -90,7 +90,7 @@ questions:
       - id: d
         text: "A WebSocket connection from a control client"
     correct: b
-    explanation: "A session is OpenClaw's unit of conversation continuity. Each session has a unique key (e.g., agent:main:telegram:dm:123456789), a JSONL transcript file, and metadata like token counts and last-updated timestamp."
+    explanation: "A session is OpenClaw's unit of conversation continuity. Each session has a unique key (e.g., agent:main:telegram:dm:821071206), a JSONL transcript file, and metadata like token counts and last-updated timestamp."
 
   - id: q7
     text: "What is the purpose of the workspace files (AGENTS.md, SOUL.md, etc.)?"

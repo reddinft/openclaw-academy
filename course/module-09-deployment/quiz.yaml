@@ -1,14 +1,108 @@
-id: mmodule-quiz
-title: "Module module Quiz"
+id: m09-quiz
+title: "Module 9 Quiz: Deployment Patterns"
 passing_score: 70
 questions:
   - id: q1
-    text: "Quiz questions for this module are coming soon."
+    text: "What is the minimum Node.js version required to run OpenClaw?"
     type: single_choice
     options:
       - id: a
-        text: "Coming soon"
+        text: "Node.js 16"
       - id: b
-        text: "Stay tuned"
-    correct: a
-    explanation: "This module's quiz is still being written. Check back after the lesson content is complete."
+        text: "Node.js 18"
+      - id: c
+        text: "Node.js 20"
+      - id: d
+        text: "Node.js 22"
+    correct: d
+    explanation: "OpenClaw requires Node.js 22 or higher. Some channel libraries (particularly WhatsApp's Baileys) depend on features introduced in Node 22. Always verify with 'node --version' before installing."
+
+  - id: q2
+    text: "You deploy OpenClaw on a Linux VPS with a user-level systemd service. You reboot the server and the Gateway doesn't start. What's the most likely cause?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The openclaw package needs to be reinstalled after every reboot"
+      - id: b
+        text: "You forgot to run 'loginctl enable-linger $USER' — user services only start after login without it"
+      - id: c
+        text: "systemd user services can never auto-start on boot — you must use a system service"
+      - id: d
+        text: "The Gateway port 18789 is blocked by the firewall"
+    correct: b
+    explanation: "User-level systemd services (--user) only start when the user logs in, unless you run 'loginctl enable-linger <user>'. Linger makes user services start at boot even without an active login session — critical for VPS deployments."
+
+  - id: q3
+    text: "Why does the OpenClaw Docker image bind port 18789 to 127.0.0.1 by default, not 0.0.0.0?"
+    type: single_choice
+    options:
+      - id: a
+        text: "127.0.0.1 is faster than 0.0.0.0 due to kernel routing optimisation"
+      - id: b
+        text: "Binding to loopback is the secure default — the Control UI shouldn't be exposed to the network without a reverse proxy or VPN"
+      - id: c
+        text: "The Gateway doesn't support LAN connections at all"
+      - id: d
+        text: "0.0.0.0 requires Docker Desktop Pro — the free version only supports loopback"
+    correct: b
+    explanation: "Loopback binding (127.0.0.1) is a security-first default. The Gateway's Control UI and WebSocket API should only be accessible via a reverse proxy with TLS, an SSH tunnel, or a Tailscale connection — not directly exposed to the public internet."
+
+  - id: q4
+    text: "You're setting up Telegram webhooks on your VPS and the webhook registration fails. What does Telegram require that long polling doesn't?"
+    type: single_choice
+    options:
+      - id: a
+        text: "A static IP address"
+      - id: b
+        text: "A valid HTTPS certificate (self-signed certs are rejected)"
+      - id: c
+        text: "The server must be in a data centre, not a residential connection"
+      - id: d
+        text: "A dedicated IP address not shared with other services"
+    correct: b
+    explanation: "Telegram's Bot API requires a valid HTTPS certificate for webhook mode. Self-signed certificates are rejected. Caddy or Certbot/nginx with Let's Encrypt provides this automatically."
+
+  - id: q5
+    text: "What is the critical difference between Docker volume mounts and named volumes when deploying OpenClaw?"
+    type: single_choice
+    options:
+      - id: a
+        text: "Named volumes are faster; bind mounts cause Gateway startup delays"
+      - id: b
+        text: "Bind mounts map to host directories (portable, easy to backup); named volumes are Docker-managed (survive container recreation but harder to access directly)"
+      - id: c
+        text: "Only named volumes persist across container restarts — bind mounts are always deleted when the container stops"
+      - id: d
+        text: "Bind mounts require root permission; named volumes run as the node user"
+    correct: b
+    explanation: "OpenClaw's recommended setup uses bind mounts (host directories like ~/.openclaw/) for config, credentials, and sessions. These are easy to back up, inspect, and move to a new host. Named volumes are useful for caches (Playwright browsers, etc.) that don't need to be portable."
+
+  - id: q6
+    text: "You configure your nginx reverse proxy but the OpenClaw Control UI connects and then immediately disconnects. What's the most likely missing nginx config?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The ssl_certificate path is wrong"
+      - id: b
+        text: "The proxy_read_timeout is too short"
+      - id: c
+        text: "The Upgrade and Connection headers for WebSocket upgrade are missing"
+      - id: d
+        text: "The proxy_pass URL should use HTTPS not HTTP for the backend"
+    correct: c
+    explanation: "The Control UI communicates via WebSocket. nginx must pass the Upgrade and Connection headers to allow the WebSocket handshake: 'proxy_set_header Upgrade $http_upgrade; proxy_set_header Connection upgrade;'. Without these, the WebSocket upgrade fails and the client appears to connect then immediately drop."
+
+  - id: q7
+    text: "What does Tailscale's 'enable-linger' equivalent solve when used with OpenClaw on a VPS?"
+    type: single_choice
+    options:
+      - id: a
+        text: "Nothing — Tailscale and systemd linger are completely unrelated features"
+      - id: b
+        text: "Tailscale replaces the need for a reverse proxy by providing automatic TLS"
+      - id: c
+        text: "Tailscale allows accessing the Gateway via its Tailscale IP without exposing port 18789 to the public internet, while 'loginctl enable-linger' ensures the Gateway starts at boot without login"
+      - id: d
+        text: "Tailscale provides the linger functionality natively, so 'loginctl enable-linger' is not needed when using Tailscale"
+    correct: c
+    explanation: "These are two separate but complementary things. 'loginctl enable-linger' solves the boot problem — systemd user services start even without a login session. Tailscale solves the access problem — you reach the Gateway securely over its Tailscale IP without exposing it publicly. Both are needed for a robust VPS deployment."

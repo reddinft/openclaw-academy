@@ -1,343 +1,197 @@
-# Agent Lifecycle
+# Agent lifecycle
 
-The agent is what makes OpenClaw *intelligent* — it's the component that takes your message, thinks about it, calls tools, and produces a response. But how does a single turn actually work? What happens when you send a message while the agent is already thinking? How does streaming work?
+Every message you send goes through the same fundamental sequence: the agent receives it, thinks about it, possibly calls some tools, and replies. Simple in outline. Surprisingly deep in the details.
 
-This lesson covers the full agent lifecycle: the turn model, queueing, steering, streaming, and how turns begin and end.
+This lesson is about what the agent _is_, how it boots, and what the loop looks like from the inside.
 
 ---
 
-## The Turn Model
+## What is an agent?
 
-OpenClaw runs **one turn at a time per session**. This is the fundamental concurrency rule.
+An agent in OpenClaw is the combination of:
 
-A "turn" is the complete cycle of:
-1. Receive user message
-2. Build context (system prompt + history + tools)
-3. Call the LLM
-4. Execute any tool calls
-5. Call the LLM again (with tool results)
-6. Repeat steps 4-5 until the model produces a final text response
-7. Deliver the response
-8. Persist the turn to the transcript
+| Component | What it is |
+|-----------|-----------|
+| LLM | The model that does the reasoning (Claude, GPT, Gemini, etc.) |
+| Tools | Capabilities the model can invoke (exec, read, browser, etc.) |
+| Workspace | The directory containing AGENTS.md, SOUL.md, USER.md, etc. |
+| Sessions | Conversation context — the transcript and memory of past turns |
+| Skills | Bundled capabilities loaded at startup |
+
+Remove any one of these and you have something less than an agent. The LLM without tools is just a chatbot. The LLM with tools but no session memory forgets everything between messages. OpenClaw ties them all together into a coherent, persistent entity.
+
+The agent runtime is built on **pi-mono**, a coding agent framework. OpenClaw wraps pi-mono with its own tool wiring, workspace management, skill loading, and compaction system.
+
+---
+
+## Agent boot: what happens at session start
+
+When a new session starts (first message from a new conversation, or after `/new`), the agent goes through a boot sequence:
 
 ```mermaid
-flowchart TD
-    A[User message arrives] --> B[Acquire session lock]
-    B --> C[Build system prompt<br/>+ history + tools]
-    C --> D[Call LLM API]
-    D --> E{Response type?}
-    E -->|Text| F[Deliver response<br/>Append to transcript]
-    E -->|Tool call| G[Execute tool]
-    G --> H[Append tool result]
-    H --> D
-    F --> I[Release session lock]
+graph TB
+    A["New session detected"] --> B["Resolve workspace path"]
+    B --> C["Load skills snapshot"]
+    C --> D["Acquire session write lock"]
+    D --> E["Assemble system prompt"]
+    E --> F["Inject bootstrap files"]
+    F --> G["Agent loop starts"]
+
+    E --> E1["Base instructions"]
+    E --> E2["Skills prompt"]
+    F --> F1["AGENTS.md"]
+    F --> F2["SOUL.md"]
+    F --> F3["USER.md"]
+    F --> F4["TOOLS.md"]
+    F --> F5["IDENTITY.md"]
 ```
 
-### Why one turn at a time?
+### Bootstrap file injection
 
-- **Consistency**: the session transcript is append-only during a turn. No race conditions.
-- **Context integrity**: the model sees a clean conversation history without interleaved responses
-- **Tool safety**: tool calls (especially `exec`) shouldn't race against each other
-
-This doesn't mean the agent is slow — turns are typically 2-10 seconds. But it does mean that **new messages arriving during a turn need special handling**. That's where queue modes come in.
-
----
-
-## Queue Modes
-
-When a new message arrives while a turn is active, OpenClaw has several options:
-
-| Mode | What happens | Best for |
-|------|-------------|----------|
-| `steer` | Inject the new message into the running turn | Interactive conversations |
-| `followup` | Queue and run after current turn completes | Sequential requests |
-| `collect` | Batch all queued messages into one followup turn | Rapid-fire messaging |
-| `interrupt` | Abort current turn, start new one | Urgent overrides |
-
-### Steer mode (default)
-
-This is the most interesting mode. When you send a message while the agent is mid-turn, OpenClaw **injects it into the active context** as a "steering" message.
-
-```mermaid
-sequenceDiagram
-    participant U as User
-    participant GW as Gateway
-    participant LLM as LLM API
-
-    U->>GW: "Analyze this CSV file"
-    GW->>LLM: [Turn starts, reads CSV...]
-    U->>GW: "Actually, focus on column B"
-    Note over GW: Steer: inject into active turn
-    GW->>LLM: [Tool result + steering message]
-    LLM-->>GW: "Looking at column B specifically..."
-```
-
-The agent sees the steering message as additional context and adapts its behavior mid-turn. It's like tapping someone on the shoulder while they're working.
-
-### Followup mode
-
-New messages wait in a queue. When the current turn finishes, the next message starts a new turn:
-
-```
-Turn 1: "Analyze this CSV"  → [processing...] → "Here's the analysis"
-Turn 2: "Now focus on column B"  → [processing...] → "Column B shows..."
-```
-
-### Collect mode
-
-All queued messages are batched into a single followup turn. Great for users who send many short messages rapidly:
-
-```
-Turn 1: "Analyze this CSV"  → [processing...]
-  (queued: "focus on column B")
-  (queued: "and compare with last month")
-Turn 1 completes → "Here's the analysis"
-Turn 2: ["focus on column B", "and compare with last month"]  → [processing...]
-```
-
-### Configuration
-
-```json5
-{
-  messages: {
-    queue: "steer",              // Default queue mode
-    byChannel: {
-      whatsapp: "collect",       // WhatsApp users tend to rapid-fire
-      slack: "followup",
-    },
-  },
-}
-```
-
----
-
-## Agent Entry Points
-
-Turns can start from two paths:
-
-### 1. Gateway RPC (`agent` method)
-
-This is how channel messages trigger turns. The Gateway receives a normalized inbound message, resolves the session, and calls the agent:
-
-```json
-{
-  "type": "req",
-  "method": "agent",
-  "params": {
-    "message": "What's the weather?",
-    "sessionKey": "agent:main:main"
-  }
-}
-```
-
-The response is immediate — just an acceptance:
-
-```json
-{
-  "ok": true,
-  "payload": { "runId": "run_abc123", "status": "accepted" }
-}
-```
-
-The actual agent output comes via **stream events** (covered below).
-
-### 2. CLI (`openclaw agent` command)
-
-You can run single agent turns from the command line:
-
-```bash
-openclaw agent "What files are in my workspace?"
-```
-
-This connects to the running Gateway, sends the message, waits for the turn to complete, and prints the response.
-
----
-
-## Session and Workspace Preparation
-
-Before the LLM is called, the agent runtime prepares the context:
-
-### 1. Workspace resolution
-
-The agent's workspace directory is resolved:
-```
-~/.openclaw/workspace/         (default agent)
-~/.openclaw/workspace-work/    (named agent)
-```
-
-### 2. Skills loading
-
-Skills are loaded (or reused from a snapshot) and their tools + prompt instructions are injected.
-
-### 3. Bootstrap injection
-
-On the first turn of a session (or after a reset), workspace files are injected into the system prompt:
+Inside `agents.defaults.workspace`, OpenClaw expects these user-editable files:
 
 | File | Purpose |
 |------|---------|
-| `AGENTS.md` | Operating instructions, capabilities, rules |
-| `SOUL.md` | Persona, tone, personality boundaries |
-| `TOOLS.md` | Tool-specific notes (SSH hosts, API endpoints) |
-| `USER.md` | Notes about the user (preferences, context) |
-| `IDENTITY.md` | Agent name, emoji, vibe |
+| `AGENTS.md` | Operating instructions — how the agent should behave, priorities, rules |
+| `SOUL.md` | Persona, tone, voice, and boundaries |
+| `USER.md` | Notes about the user — name, timezone, preferences |
+| `TOOLS.md` | Notes about local tools and conventions (does NOT control availability) |
+| `IDENTITY.md` | The agent's name, vibe, and emoji |
+| `HEARTBEAT.md` | Optional checklist for periodic heartbeat runs |
+| `BOOT.md` | Optional startup checklist (runs on gateway restart with hooks enabled) |
 
-These files are your primary lever for controlling agent behavior. Edit them and the agent changes immediately (on the next session reset or new session).
+On the first turn of a new session, all these files are injected into the system prompt. Edit any of these files and the changes take effect on the next session start. No Gateway restart needed.
 
-### 4. System prompt assembly
+Blank files are skipped. Large files are truncated with a marker (configurable via `bootstrapMaxChars`, default 20,000 chars per file; `bootstrapTotalMaxChars`, default 150,000 total).
 
-The full system prompt is built from:
-- Base OpenClaw prompt (safety rules, tool instructions)
-- Skills prompt (tool descriptions, usage guidance)
-- Bootstrap context (workspace files)
-- Per-run overrides (group system prompts, topic prompts)
-- Current date/time and timezone
+> **Tip:** If a bootstrap file is missing, OpenClaw injects a single "missing file" marker line and continues. Run `openclaw setup` to recreate any missing defaults without overwriting existing files.
 
 ---
 
-## Streaming: How Responses Arrive
+## Agent identity and persona
 
-Agent output is streamed via WebSocket events. There are three stream types:
+The agent's identity comes from `SOUL.md` and `IDENTITY.md`. Name and emoji live in `IDENTITY.md`. Everything else — tone, personality quirks, characteristic phrases, what the agent won't do — lives in `SOUL.md`.
 
-### Assistant stream
+This isn't a system prompt override — it's a structured set of files that the agent reads and internalizes. You can make your agent be anyone: a no-nonsense engineering assistant, a warm and playful companion, a formal research analyst.
 
-Text deltas from the model:
-
-```json
-{"type":"event","event":"agent","payload":{"stream":"assistant","delta":"Here's what I found"}}
-{"type":"event","event":"agent","payload":{"stream":"assistant","delta":" in the data..."}}
-```
-
-### Tool stream
-
-Tool execution progress:
-
-```json
-{"type":"event","event":"agent","payload":{"stream":"tool","phase":"start","name":"exec","input":{"command":"ls -la"}}}
-{"type":"event","event":"agent","payload":{"stream":"tool","phase":"end","name":"exec","result":"total 42\n-rw-r--..."}}
-```
-
-### Lifecycle stream
-
-Turn boundaries:
-
-```json
-{"type":"event","event":"agent","payload":{"stream":"lifecycle","phase":"start"}}
-{"type":"event","event":"agent","payload":{"stream":"lifecycle","phase":"end"}}
-```
-
-### Block streaming
-
-For chat channels, responses can be delivered as blocks (paragraphs) rather than waiting for the full response:
-
-```json5
-{
-  agents: {
-    defaults: {
-      blockStreamingDefault: "on",           // on | off
-      blockStreamingBreak: "text_end",       // text_end | message_end
-    },
-  },
-}
-```
-
-With block streaming **on**, Telegram (for example) sends each text block as it's produced, so the user sees responses appearing paragraph by paragraph. With it **off**, the full response is sent as a single message after the turn completes.
+The persona is **per-workspace**. Multiple agents can have completely different personalities by pointing to different workspace directories.
 
 ---
 
-## Abort and Stop
+## The agent loop
 
-### User-initiated stop
-
-Send `/stop` in chat to abort the current turn:
-
-```
-/stop
-```
-
-This sends an abort signal. The agent stops after the current LLM call completes (it can't interrupt a mid-flight API request, but it won't start new tool calls).
-
-### Timeout
-
-Each agent has a configurable timeout:
-
-```json5
-{
-  agents: {
-    defaults: {
-      timeoutSeconds: 600,  // Default: 10 minutes
-    },
-  },
-}
-```
-
-If a turn exceeds this, it's forcefully aborted. This prevents runaway turns (imagine a tool call that triggers an infinite loop).
-
-### Where turns end early
-
-- **Agent timeout**: forced abort after `timeoutSeconds`
-- **Abort signal**: `/stop` command
-- **Gateway disconnect**: client drops the WebSocket
-- **RPC timeout**: `agent.wait` times out (but this doesn't stop the agent — it just stops waiting)
-
----
-
-## Reply Shaping
-
-Before the response reaches the user, it goes through shaping:
-
-### NO_REPLY suppression
-
-If the model outputs `NO_REPLY`, the response is suppressed — nothing is sent to the user. This is used for silent operations (memory flush, background tasks).
-
-### Messaging tool dedup
-
-If the agent already sent a message via the `message` tool during the turn, duplicate text is removed from the final reply to avoid sending the same content twice.
-
-### Error fallback
-
-If no renderable text remains and a tool errored, a fallback error message is emitted so the user knows something went wrong.
-
----
-
-## The Full Lifecycle Diagram
+Once the session is set up, every incoming message goes through the same loop:
 
 ```mermaid
-flowchart TD
-    A[Inbound message] --> B{Turn active?}
-    B -->|No| C[Acquire lock<br/>Start turn]
-    B -->|Yes| D{Queue mode?}
-    D -->|steer| E[Inject into active turn]
-    D -->|followup| F[Queue for next turn]
-    D -->|collect| G[Add to batch queue]
-    D -->|interrupt| H[Abort + start new turn]
+sequenceDiagram
+    participant User
+    participant Gateway as Gateway (queue)
+    participant Agent as Agent Loop
+    participant LLM as LLM Provider
+    participant Tools as Tool Engine
 
-    C --> I[Resolve workspace<br/>Load skills]
-    I --> J[Build system prompt]
-    J --> K[Call LLM]
-    K --> L{Tool call?}
-    L -->|Yes| M[Execute tool<br/>Append result]
-    M --> K
-    L -->|No| N[Shape reply]
-    N --> O[Deliver to channel]
-    O --> P[Append to JSONL transcript]
-    P --> Q[Release lock]
-    Q --> R{Queued messages?}
-    R -->|Yes| C
-    R -->|No| S[Idle]
+    User->>Gateway: Send message
+    Gateway->>Agent: Dequeue + start turn
+
+    loop Agent loop
+        Agent->>LLM: POST /messages (context + tools)
+        alt Text response
+            LLM-->>Agent: {stop_reason: "end_turn", content: "..."}
+            Agent-->>Gateway: Final reply
+        else Tool call
+            LLM-->>Agent: {stop_reason: "tool_use", content: [{type:"tool_use",...}]}
+            Agent->>Tools: Execute tool
+            Tools-->>Agent: Tool result
+            Agent->>LLM: POST /messages (with tool result appended)
+        end
+    end
+
+    Agent->>Gateway: Append turn to JSONL + emit events
+    Gateway->>User: Deliver response
 ```
 
-> **Key Takeaway:** The agent lifecycle is a serialized pipeline — one turn at a time, with clear boundaries between message intake, LLM calls, tool execution, and response delivery. Queue modes give you control over what happens when reality is messier than one-message-at-a-time. Steer mode is the most natural for interactive use; collect mode handles rapid-fire messaging; followup mode keeps things strictly sequential.
+The key insight: **the agent loop continues until the LLM stops requesting tools**. A single user message might trigger three tool calls before the model produces a final text response. All of that is one "turn."
+
+### What happens at each LLM call
+
+1. **Context assembly**: system prompt + full session history + pending message
+2. **Tool definitions**: all available tools described in the model's tool format
+3. **Model call**: POST to the provider's API (Anthropic, OpenAI, etc.)
+4. **Parse response**:
+   - `stop_reason: "end_turn"` → extract text, end loop
+   - `stop_reason: "tool_use"` → execute tool calls, add results, loop again
+
+### Serialized per session
+
+Runs are **serialized per session**. If a new message arrives while a turn is running, it queues (in `followup`, `collect`, or `steer` mode — see Module 2). This prevents race conditions and keeps the session transcript consistent.
+
+### Global concurrency
+
+Across _different_ sessions, the Gateway can run multiple turns in parallel, up to `agents.defaults.maxConcurrent` (default: 1). Set it higher to allow simultaneous conversations across multiple sessions.
 
 ---
 
-## Exercises
+## Steering a running turn
 
-1. **Test queue modes**: Set `messages.queue: "steer"` and send a message followed by a correction while the agent is still processing. Does the agent adapt? Now try `"followup"` and see the difference.
+When `messages.queue.mode: "steer"`, inbound messages during a running turn are handled differently:
 
-2. **Watch the lifecycle**: Run `openclaw gateway --verbose` and send a message. Identify the lifecycle events: `start`, any tool calls, assistant deltas, and `end`. How long did the turn take?
+- The queued message is checked **after each tool call**
+- If a message is queued, remaining tool calls from the current assistant response are **skipped** (with "Skipped due to queued user message" error results)
+- The queued message is injected before the next LLM call
 
-3. **Test the timeout**: Set `agents.defaults.timeoutSeconds: 10` temporarily. Ask the agent to do something that takes a while (like reading a large file and summarizing it). Does the timeout kick in?
+This lets you interrupt and redirect the agent mid-turn — useful for "stop, I changed my mind" scenarios.
 
 ---
 
-In the next lesson, we'll explore the **Tool System** — how the agent gains its superpowers.
+## Where things can end early
+
+An agent turn can terminate before producing a normal response:
+
+| Scenario | Behavior |
+|----------|----------|
+| Agent timeout | Turn is aborted after `agents.defaults.timeoutSeconds` (default 600s) |
+| AbortSignal | Turn cancelled programmatically (e.g., `/stop` command) |
+| Gateway restart | In-progress turn is lost; session resumes cleanly on next message |
+| Context window full | Auto-compaction triggers; turn may retry after compaction |
+| Tool error | Error returned as tool result; model decides whether to retry or give up |
+
+The Gateway emits a `lifecycle` event with `phase: "error"` when a turn ends abnormally. Control clients surface this appropriately (CLI prints the error, Web UI shows it inline).
+
+---
+
+## Agents vs. sessions
+
+It's easy to conflate agents and sessions. They're different:
+
+- **Agent**: the brain. Runtime, workspace, persona, tools. Persistent as long as the config exists.
+- **Session**: a specific conversation. A transcript, a session key. Created per conversation context.
+
+One agent can have many sessions (one per DM, per group, per channel). One session belongs to exactly one agent. When you run multiple agents, each gets its own session namespace.
+
+---
+
+## Summary
+
+| Aspect | Detail |
+|--------|--------|
+| Agent = | LLM + tools + workspace + sessions + skills |
+| Boot | Workspace files injected into system prompt on first turn |
+| Persona | SOUL.md + IDENTITY.md define voice, tone, boundaries |
+| Loop | Receive → assemble context → LLM call → execute tools → repeat until done |
+| Serialized | One turn at a time per session; parallel across sessions |
+| Termination | End turn, tool error, timeout, abort, or context compaction |
+
+---
+
+> **Exercise:** Personalize your agent's identity.
+> 1. Open `~/.openclaw/workspace/SOUL.md` in your editor
+> 2. Add one specific speech pattern your agent should use — something distinctive
+> 3. Add one thing the agent should never do
+> 4. Start a new session (`/new` in any chat) and see if the changes take effect
+> 5. Then open `~/.openclaw/workspace/IDENTITY.md` and change the agent's name or emoji
+>
+> Notice that you didn't restart the Gateway — the persona change only needs a new session.
+
+---
+
+In the next lesson, we'll explore the tool system in depth — what tools exist, how policies work, and how elevated mode affects security.

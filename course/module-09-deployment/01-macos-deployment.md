@@ -1,366 +1,259 @@
-# macOS Deployment
+# macOS deployment
 
-Running OpenClaw on macOS means running it as a proper system service — not a terminal process you have to babysit. In this lesson, you'll learn how to set up OpenClaw as a launchd daemon, handle the macOS-specific gotchas around sleep, TCC permissions, PATH, and log rotation, and keep the gateway updated.
+Your Mac is where most people start with OpenClaw, and for good reason: Node.js is already there, your development environment is there, and the tools you use every day are there. Running the Gateway on your Mac means your agent has access to your filesystem, your camera, AppleScript, and the macOS companion app's full capabilities.
 
-This is the deployment pattern for Mac Mini servers, MacBook always-on setups, and the macOS companion app.
+This lesson covers getting OpenClaw installed, running as a background service, and staying running reliably.
 
 ---
 
-## launchd: The macOS Service Manager
+## Node.js version requirements
 
-On macOS, background services run via **launchd** — Apple's init system. OpenClaw installs itself as a LaunchAgent (per-user daemon) that starts automatically at login and restarts if it crashes.
+OpenClaw requires Node.js 22 or higher. Some channel libraries (particularly WhatsApp's Baileys) depend on features in Node 22, so older versions won't work.
 
-### Install the Daemon
+Don't use Bun as the Gateway runtime. Bun is flagged as incompatible for stable WhatsApp/Telegram Gateway operation. Use Node.
 
-The easiest way:
+Check what you have:
+
+```bash
+node --version
+# Should show v22.x.x or higher
+```
+
+If you're on an older version, use [nvm](https://github.com/nvm-sh/nvm) or [Homebrew](https://brew.sh):
+
+```bash
+# Via Homebrew
+brew install node@24
+brew link node@24
+
+# Via nvm
+nvm install 24
+nvm use 24
+nvm alias default 24
+```
+
+---
+
+## Installing OpenClaw
+
+```bash
+npm install -g openclaw@latest
+```
+
+Or with pnpm (preferred if you use pnpm for other projects):
+
+```bash
+pnpm add -g openclaw@latest
+```
+
+Verify:
+
+```bash
+openclaw --version
+```
+
+The install puts `openclaw` in your global npm bin path. Everything lives in:
+
+```
+~/.openclaw/
+├── openclaw.json        ← main config
+├── workspace/           ← default agent workspace
+├── agents/              ← session transcripts
+├── credentials/         ← channel auth (WhatsApp session, etc.)
+└── skills/              ← managed skills
+```
+
+---
+
+## Running onboarding
+
+The fastest path to a working setup:
 
 ```bash
 openclaw onboard --install-daemon
 ```
 
-This creates a plist file at:
+The wizard walks you through:
+1. Model provider auth (API keys)
+2. Channel setup (Telegram is fastest — just paste your bot token)
+3. Gateway token generation
+4. LaunchAgent installation (auto-start on login)
 
-```
-~/Library/LaunchAgents/ai.openclaw.gateway.plist
-```
+If you want to skip the wizard and configure manually, you can, but the wizard is worth running at least once.
 
-### Manual plist
+---
 
-If you need more control, here's the structure of the plist:
+## LaunchAgent setup for auto-start
 
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>ai.openclaw.gateway</string>
+On macOS, background services run as LaunchAgents (user-level, start on login) or LaunchDaemons (system-level, start on boot). OpenClaw uses a LaunchAgent so it runs as you, with access to your home directory.
 
-  <key>ProgramArguments</key>
-  <array>
-    <string>/opt/homebrew/Cellar/node@24/24.14.0/bin/node</string>
-    <string>/Users/you/.npm-global/lib/node_modules/openclaw/dist/index.js</string>
-    <string>gateway</string>
-  </array>
-
-  <key>EnvironmentVariables</key>
-  <dict>
-    <key>HOME</key>
-    <string>/Users/you</string>
-    <key>PATH</key>
-    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin</string>
-    <key>NODE_ENV</key>
-    <string>production</string>
-  </dict>
-
-  <key>KeepAlive</key>
-  <true/>
-
-  <key>RunAtLoad</key>
-  <true/>
-
-  <key>StandardOutPath</key>
-  <string>/Users/you/.openclaw/logs/gateway.log</string>
-
-  <key>StandardErrorPath</key>
-  <string>/Users/you/.openclaw/logs/gateway.err</string>
-</dict>
-</plist>
-```
-
-### Start / Stop / Restart
+### Installing the LaunchAgent
 
 ```bash
-# Load and start
-launchctl load ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+openclaw gateway install
+```
+
+This creates `~/Library/LaunchAgents/bot.molt.gateway.plist` and loads it.
+
+To verify it loaded:
+
+```bash
+launchctl list | grep molt
+# Should show: 0  -  bot.molt.gateway
+```
+
+### Starting, stopping, and restarting
+
+```bash
+# Start
+launchctl kickstart -k gui/$UID/bot.molt.gateway
 
 # Stop
-launchctl stop ai.openclaw.gateway
+launchctl bootout gui/$UID/bot.molt.gateway
 
-# Start (after stop)
-launchctl start ai.openclaw.gateway
-
-# Unload (fully remove)
-launchctl unload ~/Library/LaunchAgents/ai.openclaw.gateway.plist
+# Load (if not currently loaded)
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/bot.molt.gateway.plist
 ```
 
-> **Key Takeaway:** Always use `launchctl stop` + wait 2 seconds + `launchctl start` instead of trying to "restart." There's no native restart command for LaunchAgents. Wait at least 15 seconds after start before testing.
+> From the docs: the safer restart sequence (avoids issues if `openclaw` isn't in the launchd PATH) is:
+> ```bash
+> launchctl stop bot.molt.gateway && sleep 2 && launchctl start bot.molt.gateway
+> ```
+
+### Checking status
+
+```bash
+openclaw gateway status
+
+# Or check logs directly
+openclaw logs --follow
+```
+
+### The LaunchAgent plist
+
+If you want to inspect or manually edit it:
+
+```bash
+cat ~/Library/LaunchAgents/bot.molt.gateway.plist
+```
+
+Key fields:
+- `RunAtLoad: true` — starts when the plist is loaded (login)
+- `KeepAlive: true` — relaunches if the process crashes
+- `EnvironmentVariables` — injects API keys and PATH into the process
 
 ---
 
-## The PATH Problem
+## Keeping it running: sleep prevention
 
-LaunchAgents run with a minimal PATH — typically just `/usr/bin:/bin:/usr/sbin:/sbin`. Your Homebrew tools, NVM Node, and custom binaries won't be found unless you explicitly set PATH in the plist.
+The Gateway needs a network connection to send and receive messages. When your Mac sleeps, the network drops, channels disconnect, and messages queue up until the machine wakes.
 
-### Solution: Bake PATH into EnvironmentVariables
+For a desktop Mac (Mac Mini, iMac) or a MacBook kept plugged in: System Settings → Battery → Prevent Mac from sleeping automatically when the display is off. Or disable sleep entirely for the adapter.
 
-```xml
-<key>EnvironmentVariables</key>
-<dict>
-  <key>PATH</key>
-  <string>/opt/homebrew/bin:/Users/you/.local/bin:/usr/local/bin:/usr/bin:/bin</string>
-</dict>
-```
-
-Include every directory that contains binaries your skills need:
-- `/opt/homebrew/bin` — Homebrew tools
-- `~/.local/bin` — GitHub release binaries
-- `~/.npm-global/bin` — Global npm packages
-- `~/go/bin` — Go binaries
-
-### Why Not `launchctl setenv`?
-
-If your plist has its own `EnvironmentVariables` block, **it completely overrides** `launchctl setenv`. The two don't merge. This is the single most confusing macOS gotcha:
+For a MacBook you actually carry around: `caffeinate` prevents sleep while running:
 
 ```bash
-# This does NOTHING for a LaunchAgent with its own EnvironmentVariables:
-launchctl setenv MY_SECRET "hunter2"
+# Keep network alive while caffeinate runs (not useful for LaunchAgent)
+caffeinate -s -w $(pgrep -f "openclaw gateway")
 ```
 
-Always bake environment variables directly into the plist:
+Honestly, for a MacBook, design your channels to handle reconnects gracefully rather than trying to prevent sleep entirely. OpenClaw does this automatically with exponential backoff, and the Gateway reconnects within seconds of waking.
 
-```bash
-/usr/libexec/PlistBuddy -c \
-  "Add :EnvironmentVariables:MY_SECRET string $VALUE" \
-  ~/Library/LaunchAgents/ai.openclaw.gateway.plist
-```
+### What happens on reconnect
 
-Then reload:
+When the Mac wakes:
+1. Channels detect disconnection (or get a connection error)
+2. Each channel plugin starts reconnecting with exponential backoff
+3. Telegram long polling resumes — any messages received while asleep are processed immediately
+4. WhatsApp WebSocket re-establishes — pending messages are delivered
+5. Discord and Slack WebSockets reconnect — messages received while disconnected depend on the platform's delivery guarantees
 
-```bash
-launchctl unload ~/Library/LaunchAgents/ai.openclaw.gateway.plist
-launchctl load ~/Library/LaunchAgents/ai.openclaw.gateway.plist
-```
+The LaunchAgent's `KeepAlive: true` handles process crashes. The channels handle network drops. Both are automatic.
 
 ---
 
-## Preventing Sleep with caffeinate
+## The macOS companion app
 
-macOS default power settings are designed for laptops, not servers. The default `sleep` value can put the whole machine to sleep after an hour of idle — which silently drops every incoming message.
+The [OpenClaw macOS companion app](https://openclaw.ai/download) adds:
 
-### The Fix
+- Menu bar status and controls
+- macOS TCC permissions management (Notifications, Camera, Screen Recording, Accessibility, Microphone)
+- Canvas (agent-driven visual workspace)
+- iMessage access via AppleScript
+- `system.run` for executing commands in a trusted context
 
-Create a separate LaunchAgent for `caffeinate`:
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
-  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-  <key>Label</key>
-  <string>com.openclaw.caffeinate</string>
-
-  <key>ProgramArguments</key>
-  <array>
-    <string>/usr/bin/caffeinate</string>
-    <string>-s</string>
-    <string>-i</string>
-  </array>
-
-  <key>KeepAlive</key>
-  <true/>
-
-  <key>RunAtLoad</key>
-  <true/>
-</dict>
-</plist>
-```
-
-| Flag | Purpose |
-|------|---------|
-| `-s` | Prevent idle system sleep on AC power |
-| `-i` | Prevent idle sleep |
-
-No admin rights needed. `KeepAlive: true` means launchd restarts it if it ever exits. The display still sleeps (screen off), but the machine stays running.
-
-### Verify It's Working
-
-```bash
-pmset -g assertions | grep caffeinate
-```
-
-If you see a caffeinate assertion, your machine won't sleep. Also check:
-
-```bash
-pmset -g | grep "^ *sleep"
-```
-
-If it shows anything other than `0`, your daemon has been silently dropping messages during sleep windows.
-
----
-
-## TCC Permissions (Transparency, Consent, and Control)
-
-macOS ties file access permissions to the **exact binary path** — not the process name, not the user, the path. This has serious implications for OpenClaw:
-
-### The Problem
-
-If you grant disk access to `/opt/homebrew/Cellar/node@24/24.14.0/bin/node` and then switch to `~/.nvm/versions/node/v24.14.0/bin/node`, macOS silently revokes all permissions. The gateway loses access to protected directories without any error message.
-
-### The Rules
-
-1. **Lock your plist to one Node binary path.** Don't switch between NVM and Homebrew.
-2. **Grant permissions while sitting at the machine.** TCC prompts require interactive approval — no remote, no headless.
-3. **After upgrading Node**, check if the binary path changed. Homebrew minor version bumps can change the Cellar path.
-
-### Checking TCC Status
-
-```bash
-# See what has Full Disk Access
-sqlite3 ~/Library/Application\ Support/com.apple.TCC/TCC.db \
-  "SELECT client FROM access WHERE service='kTCCServiceSystemPolicyAllFiles'"
-```
-
-If your Node binary isn't listed, the gateway can't access protected directories.
-
-### The macOS Companion App
-
-The OpenClaw macOS app (`OpenClaw.app`) handles TCC differently — it requests permissions through the standard macOS approval flow. If you use the app, TCC is managed for you through System Settings > Privacy & Security.
-
-The app provides:
-- Menu bar gateway control
-- Exec approvals (approve/deny tool execution)
-- Camera, screen recording, and canvas access
-- Deep links via `openclaw://` URL scheme
-
----
-
-## Log Rotation
-
-Gateway logs live at `~/.openclaw/logs/`:
-
-```
-~/.openclaw/logs/
-├── gateway.log      ← stdout
-└── gateway.err      ← stderr
-```
-
-These grow without bound unless you rotate them. macOS doesn't have logrotate by default, so you have two options:
-
-### Option 1: newsyslog (built-in)
-
-Create `/etc/newsyslog.d/openclaw.conf`:
-
-```
-# logfile                                      mode count size when  flags
-/Users/you/.openclaw/logs/gateway.log          644  5     1024 *     J
-/Users/you/.openclaw/logs/gateway.err          644  5     1024 *     J
-```
-
-This rotates when the file hits 1MB, keeps 5 archives, and compresses them (J = bzip2).
-
-### Option 2: Cron + Manual Rotation
-
-```bash
-# Add to crontab -e:
-0 0 * * * mv ~/.openclaw/logs/gateway.log ~/.openclaw/logs/gateway.log.$(date +\%Y\%m\%d) && launchctl stop ai.openclaw.gateway && sleep 2 && launchctl start ai.openclaw.gateway
-```
+The companion app can run or attach to the Gateway. In Local mode (default), it uses the same LaunchAgent you installed above. You don't need the app for basic functionality, but if you want Camera, Screen Recording, or iMessage, you need it.
 
 ---
 
 ## Updating OpenClaw
 
-### Manual Update
+```bash
+npm install -g openclaw@latest
+openclaw gateway restart
+```
+
+Or the two-step safe restart:
 
 ```bash
-npm update -g openclaw@latest
-# Then restart the daemon:
-launchctl stop ai.openclaw.gateway
-sleep 2
-launchctl start ai.openclaw.gateway
+npm install -g openclaw@latest
+launchctl stop bot.molt.gateway && sleep 2 && launchctl start bot.molt.gateway
 ```
 
-### Auto-Update
-
-OpenClaw includes a built-in updater. Configure it in `openclaw.json`:
-
-```json5
-{
-  system: {
-    updates: {
-      auto: true,
-      channel: "stable",   // stable | beta | dev
-    },
-  },
-}
-```
-
-Update channels:
-
-| Channel | Description |
-|---------|-------------|
-| `stable` | Production releases, well-tested |
-| `beta` | Pre-release features, mostly stable |
-| `dev` | Bleeding edge, may break things |
-
-Check current version and available updates:
+Check the current version:
 
 ```bash
-openclaw version
-openclaw update --check
+openclaw --version
+```
+
+OpenClaw follows a rolling release. Breaking changes are documented in the changelog. Running `openclaw doctor` after an update catches config schema issues:
+
+```bash
+openclaw doctor
+# If it finds issues: openclaw doctor --fix
 ```
 
 ---
 
-## Non-Admin User Considerations
+## Troubleshooting
 
-Running OpenClaw under a standard (non-admin) macOS account is good security practice but introduces friction:
+### Gateway won't start
 
-| Issue | Workaround |
-|-------|-----------|
-| Can't `brew install` | Use static binaries from GitHub Releases → `~/.local/bin/` |
-| Can't modify `/opt/homebrew` | Ask admin to install, or avoid Homebrew entirely |
-| Can't change system settings | Use per-user LaunchAgents (don't need admin) |
-| Some tools need admin | Document which tools need admin install (e.g., TTS engines) |
-
-The strategy: keep the daemon user minimal. Install static binaries where possible. Only escalate to admin when absolutely necessary.
-
----
-
-## Complete macOS Deployment Checklist
-
-```
-[ ] Install OpenClaw: npm install -g openclaw@latest
-[ ] Run onboarding: openclaw onboard
-[ ] Install daemon: openclaw onboard --install-daemon
-[ ] Verify plist PATH includes all needed binary dirs
-[ ] Bake API keys into plist EnvironmentVariables
-[ ] Install caffeinate LaunchAgent
-[ ] Verify sleep prevention: pmset -g assertions
-[ ] Grant TCC permissions at the machine
-[ ] Lock Node binary path (don't switch between NVM/Homebrew)
-[ ] Set up log rotation (newsyslog or cron)
-[ ] Configure auto-update channel
-[ ] Test: send a message from each channel and verify response
+```bash
+openclaw gateway status
+openclaw doctor --non-interactive
+openclaw logs --follow
 ```
 
----
+### LaunchAgent not loading
 
-## Summary
+```bash
+# Unload and reload
+launchctl bootout gui/$UID ~/Library/LaunchAgents/bot.molt.gateway.plist
+launchctl bootstrap gui/$UID ~/Library/LaunchAgents/bot.molt.gateway.plist
+```
 
-| Topic | Key point |
-|-------|-----------|
-| **Service manager** | launchd via `~/Library/LaunchAgents/` |
-| **Install** | `openclaw onboard --install-daemon` |
-| **Restart** | `launchctl stop` + sleep 2 + `launchctl start` |
-| **PATH** | Bake into plist `EnvironmentVariables` |
-| **Env vars** | PlistBuddy, not `launchctl setenv` |
-| **Sleep** | `caffeinate -s -i` as a separate LaunchAgent |
-| **TCC** | Lock binary path, grant permissions at the machine |
-| **Logs** | `~/.openclaw/logs/`, rotate with newsyslog |
-| **Updates** | `openclaw update` or auto-update in config |
+### Port conflict (18789 already in use)
+
+```bash
+lsof -i :18789
+# Kill the conflicting process, or change the Gateway port in config
+```
+
+### "node not found" in launchd
+
+The LaunchAgent runs in a minimal environment. If you installed Node via nvm, the launchd process may not find it. Fix by adding the full path to `EnvironmentVariables.PATH` in the plist, or use the Homebrew Node (which installs to `/opt/homebrew/bin/node` and is always in the PATH).
 
 ---
 
 ## Exercise
 
-1. Write a `caffeinate` LaunchAgent plist from scratch (don't copy-paste — understand each key)
-2. Use `PlistBuddy` to add a test environment variable to your gateway plist, then verify it's visible inside the gateway process
-3. Check your current `pmset -g` output and identify whether your machine would sleep during an overnight run
-4. **Bonus:** Set up newsyslog rotation for gateway logs with a 7-day, 5MB limit
+1. Run `node --version`. If you're below v22, upgrade.
+2. Run `openclaw --version`. Confirm it's installed.
+3. Run `openclaw gateway status`. Is the Gateway running?
+4. Run `launchctl list | grep molt`. Is the LaunchAgent loaded?
+5. Stop and start the Gateway manually using `launchctl`. Watch the logs reconnect.
 
 ---
 
-In the next lesson, we'll containerize everything with **Docker deployment**.
+In the next lesson, we'll cover Docker deployment — the containerised path that makes OpenClaw reproducible and portable.

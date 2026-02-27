@@ -1,14 +1,108 @@
-id: mmodule-quiz
-title: "Module module Quiz"
+id: m02-quiz
+title: "Module 2 Quiz: Gateway Architecture"
 passing_score: 70
 questions:
   - id: q1
-    text: "Quiz questions for this module are coming soon."
+    text: "What type of process is the OpenClaw Gateway?"
     type: single_choice
     options:
       - id: a
-        text: "Coming soon"
+        text: "A short-lived script that runs on demand when a message arrives"
       - id: b
-        text: "Stay tuned"
-    correct: a
-    explanation: "This module's quiz is still being written. Check back after the lesson content is complete."
+        text: "A long-lived Node.js process that runs continuously as a system service"
+      - id: c
+        text: "A Docker container managed by Kubernetes"
+      - id: d
+        text: "A serverless function hosted in the cloud"
+    correct: b
+    explanation: "The Gateway is a long-lived Node.js process that runs continuously in the background, managed by launchd (macOS), systemd (Linux), or Docker. It starts at login and stays running indefinitely, managing all channel connections and agent sessions."
+
+  - id: q2
+    text: "What does the default dmScope of 'main' mean for session keying?"
+    type: single_choice
+    options:
+      - id: a
+        text: "Each DM from every sender gets its own separate session"
+      - id: b
+        text: "Only the main channel (Telegram) is used for DM sessions"
+      - id: c
+        text: "All direct messages across all channels share a single session key"
+      - id: d
+        text: "DMs are disabled and only group chats are allowed"
+    correct: c
+    explanation: "With dmScope:'main' (the default), all direct messages — whether from Telegram, WhatsApp, Discord, or any other channel — resolve to the session key 'agent:<agentId>:main'. This gives the agent continuous memory across all your messaging apps."
+
+  - id: q3
+    text: "Where does OpenClaw store session transcripts?"
+    type: single_choice
+    options:
+      - id: a
+        text: "In a PostgreSQL database at localhost:5432"
+      - id: b
+        text: "In ~/.openclaw/agents/<agentId>/sessions/ as JSONL files, one per session"
+      - id: c
+        text: "In Redis as JSON blobs keyed by session ID"
+      - id: d
+        text: "In the workspace directory alongside AGENTS.md"
+    correct: b
+    explanation: "Session transcripts are stored as JSONL (JSON Lines) files at ~/.openclaw/agents/<agentId>/sessions/<SessionId>.jsonl. Each line is one event (user message, assistant response, tool call, or tool result). No external database is required."
+
+  - id: q4
+    text: "What happens to a running agent turn if the WebSocket client disconnects mid-response?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The agent turn is immediately cancelled to avoid wasted API calls"
+      - id: b
+        text: "The Gateway continues the turn; the client can rejoin and see the result after reconnecting"
+      - id: c
+        text: "The turn is paused and replayed from the beginning on reconnect"
+      - id: d
+        text: "The Gateway crashes and needs to be manually restarted"
+    correct: b
+    explanation: "Agent turns are owned by the Gateway, not by the WebSocket connection. If a client disconnects mid-run, the Gateway continues processing. On reconnect, the client receives a fresh snapshot (including any completed runs) via the connect response. Runs survive disconnections."
+
+  - id: q5
+    text: "What format does ~/.openclaw/openclaw.json use?"
+    type: single_choice
+    options:
+      - id: a
+        text: "YAML — because it's more human-readable than JSON"
+      - id: b
+        text: "TOML — because it supports nested tables natively"
+      - id: c
+        text: "JSON5 — JSON with comments and trailing commas allowed"
+      - id: d
+        text: "Strict JSON — no comments or trailing commas"
+    correct: c
+    explanation: "openclaw.json uses JSON5 format, which is a superset of JSON that allows // and /* */ comments, trailing commas, and unquoted keys. This makes it much more maintainable for a config file that evolves over time."
+
+  - id: q6
+    text: "In the WebSocket protocol, when you send an 'agent' request with a message, what does the Gateway respond with immediately?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The complete agent response text once the turn finishes"
+      - id: b
+        text: "A {runId, acceptedAt} acknowledgment — the actual response comes via streaming events"
+      - id: c
+        text: "An error if the agent is already busy with another request"
+      - id: d
+        text: "The current session token count so the client knows if compaction is needed"
+    correct: b
+    explanation: "The 'agent' method returns immediately with {runId, acceptedAt} to confirm the message was accepted. The actual response streams back as a series of 'agent' events with stream:'assistant' deltas. This decouples message acceptance from response delivery."
+
+  - id: q7
+    text: "What does 'openclaw doctor' do?"
+    type: single_choice
+    options:
+      - id: a
+        text: "It installs the latest version of OpenClaw from npm"
+      - id: b
+        text: "It diagnoses and repairs health issues: config validation, legacy migrations, state checks, and channel status"
+      - id: c
+        text: "It monitors the Gateway in real time and restarts it when it crashes"
+      - id: d
+        text: "It deletes old session transcripts to free up disk space"
+    correct: b
+    explanation: "openclaw doctor is the comprehensive health check and repair tool. It validates config schema, applies legacy key migrations, checks state directory integrity, probes channel connections, warns about security issues, and can restart the Gateway when it finds problems. Run it whenever something seems off or after an upgrade."

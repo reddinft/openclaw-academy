@@ -1,14 +1,108 @@
-id: mmodule-quiz
-title: "Module module Quiz"
+id: m04-quiz
+title: "Module 4 Quiz: Agent System"
 passing_score: 70
 questions:
   - id: q1
-    text: "Quiz questions for this module are coming soon."
+    text: "What are the four core components that make up an OpenClaw agent?"
     type: single_choice
     options:
       - id: a
-        text: "Coming soon"
+        text: "A model provider, a webhook URL, a database connection, and a Docker container"
       - id: b
-        text: "Stay tuned"
-    correct: a
-    explanation: "This module's quiz is still being written. Check back after the lesson content is complete."
+        text: "An LLM, tools, a workspace, and sessions (plus skills)"
+      - id: c
+        text: "A REST API, a message queue, a session token, and a config file"
+      - id: d
+        text: "A Telegram bot, a shell script, a cron job, and a log file"
+    correct: b
+    explanation: "An agent is the combination of: an LLM (the reasoning engine), tools (exec, read, browser, etc.), a workspace (directory with AGENTS.md, SOUL.md, etc.), and sessions (conversation transcripts). Skills add additional capabilities on top."
+
+  - id: q2
+    text: "Which workspace file controls the agent's personality, tone, and behavioral boundaries?"
+    type: single_choice
+    options:
+      - id: a
+        text: "AGENTS.md — because it contains the agent's operating instructions"
+      - id: b
+        text: "TOOLS.md — because it tells the agent which tools to use"
+      - id: c
+        text: "SOUL.md — because it defines persona, voice, and what the agent won't do"
+      - id: d
+        text: "IDENTITY.md — because it contains the agent's name and emoji"
+    correct: c
+    explanation: "SOUL.md defines the agent's persona: its voice, tone, characteristic phrases, and hard limits. IDENTITY.md has the name/emoji. AGENTS.md has operating instructions and memory patterns. TOOLS.md has tool usage notes (not access control)."
+
+  - id: q3
+    text: "What does TOOLS.md control?"
+    type: single_choice
+    options:
+      - id: a
+        text: "Which tools the agent is allowed to use (the tool allowlist)"
+      - id: b
+        text: "Tool execution timeouts and sandboxing behavior"
+      - id: c
+        text: "Nothing — it's guidance notes for the agent, not a policy file"
+      - id: d
+        text: "The list of skills loaded at startup"
+    correct: c
+    explanation: "TOOLS.md does NOT control tool availability — it's a human-readable notes file for the agent about local tools and conventions (e.g., which SSH hosts to use, preferred CLI flags). Tool availability is controlled by the tools.allow/deny configuration in openclaw.json."
+
+  - id: q4
+    text: "In the agent loop, what happens when the LLM responds with 'stop_reason: tool_use'?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The loop ends and the tool call is returned to the user as the final response"
+      - id: b
+        text: "The requested tool is executed, the result is appended to the conversation, and another LLM call is made"
+      - id: c
+        text: "The agent pauses and waits for user approval before running the tool"
+      - id: d
+        text: "The Gateway raises an error because tool_use is not a valid stop reason"
+    correct: b
+    explanation: "When the LLM returns stop_reason:'tool_use', the agent executes the requested tool(s), appends the tool results to the conversation history, and makes another LLM call. This loop continues until the model returns stop_reason:'end_turn' with a text response."
+
+  - id: q5
+    text: "What is the difference between session compaction and context pruning?"
+    type: single_choice
+    options:
+      - id: a
+        text: "Compaction deletes old sessions; pruning deletes old tool results"
+      - id: b
+        text: "Compaction summarizes old conversation history (modifies JSONL on disk); pruning trims oversized tool results from in-memory context only (disk unchanged)"
+      - id: c
+        text: "Compaction and pruning are the same thing — different names for the same process"
+      - id: d
+        text: "Compaction is manual (you trigger it); pruning is automatic"
+    correct: b
+    explanation: "Compaction is triggered when the session approaches the context window limit — it summarizes older conversation history and updates the JSONL transcript on disk. Context pruning is a lighter in-memory operation that trims oversized tool result content before each LLM call, without touching the on-disk transcript."
+
+  - id: q6
+    text: "In a multi-agent setup with bindings, if both a peer-level binding and a channel-level binding match an incoming message, which wins?"
+    type: single_choice
+    options:
+      - id: a
+        text: "The channel-level binding wins because it's more general and covers more cases"
+      - id: b
+        text: "The last binding in the list always wins regardless of specificity"
+      - id: c
+        text: "The peer-level binding wins because more-specific matches always take priority"
+      - id: d
+        text: "Both agents receive the message (broadcast behavior)"
+    correct: c
+    explanation: "OpenClaw bindings use 'most-specific wins' semantics. Peer matches (exact DM/group/channel ID) beat channel-level matches. This lets you put channel-wide rules as fallbacks and add per-peer exceptions above them."
+
+  - id: q7
+    text: "What does the 'memory flush' feature do before session compaction?"
+    type: single_choice
+    options:
+      - id: a
+        text: "It clears the MEMORY.md file to prevent stale information from being re-injected"
+      - id: b
+        text: "It runs a silent agent turn that prompts the agent to write important context to a daily memory log before history gets summarized"
+      - id: c
+        text: "It uploads the session transcript to a cloud backup service"
+      - id: d
+        text: "It sends the user a notification that their session is about to be compacted"
+    correct: b
+    explanation: "Memory flush (agents.defaults.compaction.memoryFlush) runs a silent agent turn before compaction with a prompt like 'Write lasting notes to memory/YYYY-MM-DD.md; reply NO_REPLY if nothing to store.' This gives the agent a chance to crystallize important context before older history is summarized away."

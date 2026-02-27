@@ -1,322 +1,247 @@
-# Channel Plugin Architecture
+# Channel plugin architecture
 
-Channels are how OpenClaw **touches the world**. Every messaging platform — Telegram, WhatsApp, Discord, Slack, Signal, iMessage, Matrix, IRC — connects through a channel plugin. The plugin handles the platform-specific weirdness so the rest of the system doesn't have to.
-
-In this lesson, we'll look at how channel plugins are structured, how messages flow through them, and what makes each platform unique.
+Every message that reaches your agent travels through a **channel plugin** — a piece of code that owns the full relationship between OpenClaw and one messaging surface. Before you configure Telegram or WhatsApp, it helps to understand what a channel actually is and how the lifecycle works. That understanding will save you hours of debugging later.
 
 ---
 
-## The Plugin Model
+## What a channel is
 
-Each channel is a **self-contained plugin** that implements a common interface. The Gateway doesn't know the details of Telegram's Bot API or WhatsApp's Baileys protocol — it just knows how to talk to channel plugins.
+A channel is a messaging surface plugin — a self-contained module that:
+
+1. Maintains a persistent connection to one platform (WebSocket, long-poll, webhook, etc.)
+2. Translates incoming platform events into OpenClaw's internal `InboundMessage` envelope
+3. Enforces access control (pairing codes, allowlists, group policies)
+4. Sends outbound responses back through the platform-specific API
+
+The Gateway owns all channel connections. You don't run separate processes per channel — it's one Node.js process with multiple channel plugins running inside it.
 
 ```mermaid
 graph TB
-    subgraph Plugins["Channel Plugins"]
-        TG["Telegram<br/>grammY"]
-        WA["WhatsApp<br/>Baileys"]
-        DC["Discord<br/>Carbon"]
-        SL["Slack<br/>Bolt"]
-        SG["Signal<br/>signal-cli"]
-        IM["iMessage<br/>BlueBubbles"]
+    subgraph Gateway["🏠 Gateway (one process)"]
+        TG[Telegram plugin<br/>grammY long-poll]
+        WA[WhatsApp plugin<br/>Baileys socket]
+        DC[Discord plugin<br/>@buape/carbon]
+        SL[Slack plugin<br/>Bolt SDK]
+
+        ROUTER[Channel Router]
+        SESSION[Session Manager]
+        AGENT[Agent Runtime]
     end
 
-    subgraph Gateway["Gateway Core"]
-        CM["Channel Manager"]
-        NORM["Message Normalizer"]
-        ROUTE["Router"]
-    end
-
-    TG --> CM
-    WA --> CM
-    DC --> CM
-    SL --> CM
-    SG --> CM
-    IM --> CM
-    CM --> NORM
-    NORM --> ROUTE
+    TG --> ROUTER
+    WA --> ROUTER
+    DC --> ROUTER
+    SL --> ROUTER
+    ROUTER --> SESSION
+    SESSION --> AGENT
+    AGENT --> SESSION
+    SESSION --> TG
+    SESSION --> WA
+    SESSION --> DC
+    SESSION --> SL
 ```
 
-### What each plugin does
+One message in, one channel plugin handles it, agent responds, same plugin sends the reply back. Routing is always deterministic: inbound messages reply on the same channel they arrived from.
 
-1. **Connect** to the platform (WebSocket, polling, webhook, CLI daemon)
-2. **Receive** inbound messages in the platform's native format
-3. **Normalize** them into OpenClaw's internal `InboundMessage` type
-4. **Send** outbound messages by converting from OpenClaw's format back to the platform's API
-5. **Handle** platform-specific features (reactions, read receipts, threads, media)
-6. **Reconnect** on failure with exponential backoff
+---
 
-### Bundled vs plugin channels
+## Channel lifecycle
 
-| Type | Installed with OpenClaw | Examples |
-|------|------------------------|---------|
-| **Bundled** | Yes, always available | Telegram, WhatsApp, Discord, Slack, Signal, iMessage, WebChat |
-| **Plugin** | Installed separately via npm | Feishu, MS Teams, Matrix, Mattermost, IRC, LINE, Nostr, Twitch |
+Every channel goes through the same four phases on startup:
 
-Bundled channels start automatically when their config section exists (unless `enabled: false`). Plugin channels need to be installed first:
+```mermaid
+sequenceDiagram
+    participant GW as Gateway
+    participant CH as Channel Plugin
+    participant PLATFORM as Platform API
+
+    GW->>CH: initialize(config)
+    CH->>PLATFORM: connect (polling / WS / webhook register)
+    PLATFORM-->>CH: connected ✓
+
+    loop Every inbound message
+        PLATFORM->>CH: message event
+        CH->>CH: validate sender (pairing / allowlist)
+        CH->>GW: InboundMessage {text, sender, chat, channel, timestamp}
+        GW->>GW: session lookup → agent turn
+        GW->>CH: OutboundMessage {text, media}
+        CH->>PLATFORM: sendMessage(...)
+    end
+
+    GW->>CH: shutdown()
+    CH->>PLATFORM: disconnect
+```
+
+### Phase 1: Connect
+
+The plugin establishes its connection to the platform. Different channels use different mechanisms:
+
+| Channel | Connection method |
+|---------|------------------|
+| Telegram | grammY long polling (or webhook if configured) |
+| WhatsApp | Baileys WebSocket (maintains linked device session) |
+| Discord | Discord Gateway WebSocket |
+| Slack | Socket Mode WebSocket (or HTTP Events API) |
+| Google Chat | HTTP webhook (inbound only) |
+| Signal | JSON-RPC to local signal-cli daemon |
+
+### Phase 2: Receive
+
+When a message arrives, the plugin:
+
+1. Validates the event format — not every platform update is actually a message
+2. Checks access control — is this sender approved? Unknown senders get a pairing code (in `pairing` mode) or get dropped silently (in `allowlist` mode)
+3. Normalises it into a shared `InboundMessage` envelope
+4. Marks content as untrusted — all external text gets wrapped in safety markers before reaching the LLM
+
+### Phase 3: Route
+
+The normalised message passes to the Channel Router, which determines which agent handles it (based on `bindings` config) and which session the message belongs to (based on sender, group, and `dmScope`).
+
+Session keys follow a predictable pattern:
+
+```
+agent:<agentId>:<channel>:<type>:<id>
+
+Examples:
+  agent:main:telegram:dm:821071206       ← Telegram DM
+  agent:main:whatsapp:group:12345@g.us   ← WhatsApp group
+  agent:main:discord:channel:987654321   ← Discord channel
+  agent:main:main                        ← default (DMs collapse here by default)
+```
+
+### Phase 4: Respond
+
+Once the agent finishes its turn, the response flows back through the same channel plugin that received the original message. The plugin translates the generic response into whatever the platform expects: Telegram HTML, Discord embed, Slack blocks, etc.
+
+---
+
+## Built-in vs plugin channels
+
+OpenClaw ships with two tiers of channels:
+
+### Core (bundled, no extra install)
+
+These are compiled into the main OpenClaw package:
+
+| Channel | Library | Notes |
+|---------|---------|-------|
+| Telegram | grammY | Bot API, polling or webhook |
+| WhatsApp | Baileys | WhatsApp Web multi-device |
+| Discord | @buape/carbon | Bot + slash commands |
+| Slack | @slack/bolt | Socket Mode + HTTP Events |
+| Google Chat | Custom HTTP | Webhook-based |
+| Signal | signal-cli wrapper | Requires separate CLI |
+| iMessage/BlueBubbles | BlueBubbles REST | Requires macOS + BlueBubbles app |
+| WebChat | Built-in WS | Always available — the browser UI |
+
+### Plugin (install separately)
+
+These ship as optional plugins to keep the base install lean:
 
 ```bash
-# Install a plugin channel
-npm install -g openclaw-channel-matrix
+openclaw plugins install @openclaw/matrix
+openclaw plugins install @openclaw/msteams
+openclaw plugins install @openclaw/mattermost
+openclaw plugins install @openclaw/irc
+openclaw plugins install @openclaw/nostr
+openclaw plugins install @openclaw/line
+openclaw plugins install @openclaw/twitch
 ```
+
+Plugins register themselves on the same channel lifecycle — they're first-class, not second-tier addons.
 
 ---
 
-## The InboundMessage Type
+## Channel configuration in openclaw.json
 
-When a message arrives on any channel, the plugin converts it to a standard internal format. This is the key abstraction — everything downstream works with the same shape regardless of whether the message came from WhatsApp or Discord.
-
-An `InboundMessage` contains:
-
-| Field | Type | Description |
-|-------|------|-------------|
-| `text` | string | The message body |
-| `sender` | string | Platform-specific sender ID |
-| `chat` | string | Platform-specific chat/group ID |
-| `channel` | string | Channel name (`telegram`, `whatsapp`, etc.) |
-| `accountId` | string | Account instance (for multi-account setups) |
-| `timestamp` | number | When the message was sent |
-| `media` | array? | Attached images, audio, documents |
-| `replyTo` | object? | Quoted message info (if replying to something) |
-
-### Media handling
-
-Different platforms have wildly different media capabilities:
-
-| Feature | WhatsApp | Telegram | Discord | Slack | Signal |
-|---------|----------|----------|---------|-------|--------|
-| Images | Yes (50MB) | Yes (5MB bot) | Yes (8MB) | Yes | Yes |
-| Audio | Yes (voice notes) | Yes | Yes | Yes | Yes |
-| Video | Yes | Yes | Yes | Yes | Yes |
-| Documents | Yes | Yes | Yes | Yes | Limited |
-| Stickers | Yes | Yes | Yes | No | Yes |
-| Reactions | Yes | Yes | Yes | Yes | Yes |
-| Read receipts | Yes (configurable) | No | No | No | No |
-
-The channel plugin downloads media, stores it locally, and passes the local path in the `InboundMessage`. The agent can then process it (send to an image model, transcribe audio, etc.).
-
-### Untrusted content marking
-
-Here's a critical security detail: **all inbound message content is wrapped in untrusted markers** before it reaches the agent. This prevents prompt injection attacks where a malicious user crafts a message that tries to hijack the agent.
-
-```
-<EXTERNAL_UNTRUSTED_CONTENT>
-[The actual message from the user]
-</EXTERNAL_UNTRUSTED_CONTENT>
-```
-
-The agent sees these markers and knows to treat the content as user input, not as instructions.
-
----
-
-## Outbound Message Flow
-
-When the agent produces a response, it goes through the reverse path:
-
-```mermaid
-flowchart LR
-    A[Agent response] --> B[Channel Manager]
-    B --> C{Which channel?}
-    C --> D[Telegram plugin<br/>sendMessage API]
-    C --> E[WhatsApp plugin<br/>Baileys send]
-    C --> F[Discord plugin<br/>Channel.send]
-    C --> G[Slack plugin<br/>chat.postMessage]
-```
-
-Responses are always routed back to **the channel they came from**. The agent doesn't choose where to send — routing is deterministic.
-
-### Chunking and limits
-
-Every platform has message length limits. OpenClaw handles this transparently:
-
-| Platform | Max message length | Chunking strategy |
-|----------|-------------------|-------------------|
-| WhatsApp | ~4000 chars | Split by length or newline |
-| Telegram | 4096 chars | Split, preserving code fences |
-| Discord | 2000 chars | Split, preserving code fences |
-| Slack | 40000 chars | Rarely needs splitting |
-
-The `textChunkLimit` and `chunkMode` settings control how long messages are split. The default modes try to avoid breaking code blocks mid-fence.
-
----
-
-## DM Policy: Who Can Talk to Your Agent?
-
-Every channel enforces **DM access control**. This is your first line of defense against random people messaging your bot.
-
-### The four policies
-
-```mermaid
-flowchart TD
-    MSG[Inbound DM] --> CHECK{DM Policy?}
-    CHECK -->|pairing| PAIR[Send pairing code<br/>Owner must approve]
-    CHECK -->|allowlist| ALLOW{Sender in allowFrom?}
-    CHECK -->|open| ACCEPT[Accept message]
-    CHECK -->|disabled| DROP[Ignore message]
-    ALLOW -->|Yes| ACCEPT
-    ALLOW -->|No| DROP
-    PAIR --> APPROVE{Owner approves?}
-    APPROVE -->|Yes| ACCEPT
-    APPROVE -->|No| DROP
-```
-
-| Policy | Security | Convenience | Best for |
-|--------|----------|-------------|----------|
-| `pairing` (default) | High — explicit approval required | Medium — one-time setup per sender | Personal use |
-| `allowlist` | High — only pre-approved senders | Low — must add each sender manually | Known contacts |
-| `open` | Low — anyone can message | High — no setup needed | Public bots (use with caution) |
-| `disabled` | Maximum — no DMs at all | None | Group-only channels |
-
-### Pairing flow
-
-When `dmPolicy: "pairing"` is active and an unknown sender messages your bot:
-
-1. OpenClaw sends them a **pairing code** (a short alphanumeric string)
-2. The sender tells you the code (via another channel, in person, etc.)
-3. You approve via CLI: `openclaw pairing approve <code>`
-4. Future messages from that sender are accepted automatically
-
-Pairing codes expire after 1 hour. A maximum of 3 pending pairing requests per channel prevents spam.
-
----
-
-## Group Policy: Managing Group Chats
-
-Groups add complexity — the agent might be in a group with 50 people. You don't want it responding to every message.
-
-### Group allowlists
+All channel config lives under the `channels` key in `~/.openclaw/openclaw.json`. Each channel has its own sub-key:
 
 ```json5
 {
   channels: {
+    // Enable/disable Telegram with basic DM policy
     telegram: {
-      groupPolicy: "allowlist",  // Only configured groups
+      enabled: true,
+      botToken: "123456:ABC-DEF...",
+      dmPolicy: "pairing",
       groups: {
-        "-1001234567890": {
-          requireMention: true,     // Only respond when @mentioned
-          allowFrom: ["@admin"],    // Only these users can trigger it
-        },
-        "*": {
-          requireMention: true,     // Default for all other allowed groups
-        },
-      },
+        "*": { requireMention: true }
+      }
     },
-  },
-}
-```
 
-### Mention gating
-
-The `requireMention` flag is the most common group setting. When enabled, the agent only responds when explicitly @mentioned (or when the message matches configured `mentionPatterns`).
-
-This prevents the agent from responding to every casual conversation in a group — it only speaks when spoken to.
-
----
-
-## Channel-Specific Features
-
-Each platform has unique capabilities that channel plugins expose:
-
-### Reactions
-
-The agent can react to messages (and receive reactions):
-
-```json5
-{
-  channels: {
-    telegram: {
-      actions: { reactions: true },
-      reactionNotifications: "own",  // off | own | all
+    // WhatsApp with explicit allowlist
+    whatsapp: {
+      enabled: true,
+      dmPolicy: "allowlist",
+      allowFrom: ["+15551234567"]
     },
+
+    // Discord with guild allowlist
     discord: {
-      actions: { reactions: true },
+      enabled: true,
+      token: "MTIz...",
+      groupPolicy: "allowlist",
+      guilds: {
+        "123456789012345678": {
+          requireMention: false,
+          users: ["987654321098765432"]
+        }
+      }
     },
-  },
+
+    // Slack in Socket Mode
+    slack: {
+      enabled: true,
+      mode: "socket",
+      appToken: "xapp-1-...",
+      botToken: "xoxb-..."
+    }
+  }
 }
 ```
 
-### Threading
+### Access control defaults
 
-Slack and Discord support threads. Telegram has forum topics. The channel plugin maps these to sub-session keys:
+Every channel that isn't explicitly open defaults to allowlist mode at the group level. This is intentional — your agent should only respond to people you trust:
 
-```
-Slack thread   →  agent:main:slack:channel:C123:thread:1234567890
-Discord thread →  agent:main:discord:channel:123:thread:987654
-Telegram topic →  agent:main:telegram:group:-100123:topic:42
-```
+| Policy | Behaviour |
+|--------|-----------|
+| `pairing` | Unknown senders get a pairing code; you approve them |
+| `allowlist` | Only explicitly listed senders can interact |
+| `open` | Anyone can message the agent (requires `allowFrom: ["*"]`) |
+| `disabled` | Channel accepts no inbound messages |
 
-### Streaming (live typing)
-
-Some channels support showing the response as it's being generated:
-
-| Channel | Streaming support | How it works |
-|---------|------------------|-------------|
-| Telegram | Yes (`streaming: "partial"`) | Send + edit message |
-| WebChat | Yes (native) | WebSocket delta events |
-| Discord | Limited | Edit message on completion |
-| WhatsApp | No | Full message on completion |
+> Start with `pairing` for DMs (the default). Switch to `allowlist` once you know exactly who should have access. Never use `open` unless you've thought through the implications.
 
 ---
 
-## Channel Reconnection
+## The shared envelope
 
-Channels disconnect. Networks fail. Tokens expire. Every channel plugin handles this with **exponential backoff reconnection**:
+Once a message passes through a channel plugin, everything the agent sees is identical regardless of where it came from:
 
-```json5
+```javascript
 {
-  web: {
-    reconnect: {
-      initialMs: 2000,       // Start with 2s delay
-      maxMs: 120000,         // Cap at 2 minutes
-      factor: 1.4,           // Multiply by 1.4 each retry
-      jitter: 0.2,           // Add 20% random jitter
-      maxAttempts: 0,        // 0 = unlimited retries
-    },
-  },
+  text: "What's the weather in Sydney?",    // normalised message text
+  sender: "telegram:821071206",             // platform:id
+  chat: "telegram:dm:821071206",            // session identifier
+  channel: "telegram",                      // which plugin handled this
+  timestamp: 1709042400000,
+  media: null,                              // null or media descriptor
+  replyTo: null,                            // quoted reply context
 }
 ```
 
-The jitter prevents thundering herd problems when the Gateway restarts with many channels — they don't all retry at the exact same instant.
+The agent doesn't know or care which channel it's responding to. That's the channel plugin's job.
 
 ---
 
-## Inbound Message Deduplication
+## Exercise
 
-Channels can redeliver the same message after reconnects (Telegram is particularly prone to this). OpenClaw keeps a **short-lived dedup cache** keyed by channel/account/peer/message-id. Duplicate deliveries are silently dropped — no duplicate agent runs.
-
-## Inbound Debouncing
-
-When someone types multiple rapid messages, OpenClaw can batch them into a single agent turn:
-
-```json5
-{
-  messages: {
-    inbound: {
-      debounceMs: 2000,          // Wait 2s for more messages
-      byChannel: {
-        whatsapp: 5000,          // WhatsApp users send lots of short messages
-        slack: 1500,
-        discord: 1500,
-      },
-    },
-  },
-}
-```
-
-Text-only messages are debounced; media and attachments flush immediately. Control commands (`/new`, `/model`, etc.) bypass debouncing entirely.
-
-> **Key Takeaway:** Channel plugins are OpenClaw's adapters to the real world. They handle the messy platform-specific details — connection management, media formats, message limits, threading models — so the rest of the system works with clean, normalized messages. The DM policy system gives you fine-grained control over who can reach your agent, and group policies prevent your agent from being overwhelmed in busy chats.
+1. Run `openclaw channels status` to see which channels are currently active on your Gateway.
+2. Look at your `~/.openclaw/openclaw.json` and find the `channels` block (or note it's missing).
+3. Pick one channel you want to add. What is the minimum config you'd need? Write it out before looking at the next lesson.
 
 ---
 
-## Exercises
-
-1. **List your channels**: Run `openclaw channels status --probe` to see which channels are connected and their current state. Note any warnings.
-
-2. **Check DM policies**: Review your config and identify the DM policy for each channel. Is it `pairing`, `allowlist`, or `open`? Could any of them be tightened?
-
-3. **Test mention gating**: If you have a group configured with `requireMention: true`, try sending a message in the group without @mentioning the bot. Verify it doesn't respond. Then @mention it and confirm it does.
-
----
-
-In the next lesson, we'll go deep on the two most popular channels: **Telegram and WhatsApp**.
+The next lesson covers the two most popular channels: Telegram and WhatsApp.

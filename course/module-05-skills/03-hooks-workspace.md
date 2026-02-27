@@ -1,459 +1,229 @@
 # Hooks & Workspace Files
 
-Skills give your agent capabilities. Hooks give it **autonomy** — the ability to react to events, run on a schedule, and maintain state without being prompted. Combined with workspace files, they form the agent's persistent identity and behavior layer.
+Skills teach the agent what it *can* do. Workspace files tell it *who* it is and *how* to behave. Hooks wire up automations that trigger when things happen.
+
+These three systems work together to shape an agent that feels genuinely personal — not just a generic LLM with a prompt.
 
 ---
 
-## Part 1: The Hook System
+## Workspace Files: The Agent's Identity
 
-### What Are Hooks?
+Every agent has a **workspace directory** (default: `~/.openclaw/workspace`). At the start of each new session, OpenClaw reads the files in this directory and injects their contents into the system prompt. The agent starts every conversation already knowing who it is, who it's talking to, and what it should care about.
 
-Hooks are event-driven scripts that fire in response to Gateway lifecycle events. They're like Git hooks or webhooks, but for your AI agent.
+```
+~/.openclaw/workspace/
+├── AGENTS.md     ← Operating instructions (how to behave, what to prioritize)
+├── SOUL.md       ← Persona, tone, and boundaries
+├── USER.md       ← Who the user is, how to address them
+├── IDENTITY.md   ← Agent name, emoji, personality vibe
+├── TOOLS.md      ← Notes about local tools (SSH hosts, API keys doc, etc.)
+├── HEARTBEAT.md  ← Tiny checklist for periodic check-ins
+├── BOOT.md       ← Startup checklist run on gateway restart
+├── MEMORY.md     ← (optional) Curated long-term memory
+└── memory/       ← Daily memory logs (YYYY-MM-DD.md)
+    └── 2026-02-27.md
+```
+
+### What each file does
+
+**AGENTS.md** — The rules document. What the agent should do every session (check inbox, read voice guide), what it can and can't do, how to communicate, how to handle edge cases. This is where you put standing instructions that should survive across every conversation.
+
+**SOUL.md** — Persona. Tone. The agent's voice. If you want the agent to feel like a specific character (warm, dry, precise, playful), write it here. Changing SOUL.md changes how the agent sounds on the next session.
+
+**USER.md** — Context about the person. Name, timezone, location, preferences. The agent reads this so it can address you correctly and apply relevant defaults without you repeating yourself.
+
+**IDENTITY.md** — Created during first-run setup. Contains the agent's chosen name, emoji, and vibe. Lightweight, mostly cosmetic.
+
+**TOOLS.md** — A personal cheat sheet. Not tool config — that lives in `openclaw.json`. This is where you document your local setup: SSH host aliases, camera names, which voice to use, device nicknames. The agent uses it as working memory about your specific environment.
+
+**HEARTBEAT.md** — A short checklist the agent follows during periodic heartbeat runs (scheduled check-ins). Keep it very short — this fires every 30–60 minutes.
+
+**BOOT.md** — A startup checklist the `boot-md` hook runs once when the Gateway starts. Good for "send me a morning summary", "check the weather", "remind me about today's meetings". Executed once per Gateway boot, not every session.
+
+**MEMORY.md** — Long-term curated memory. Notes the agent writes about important context — preferences, decisions, ongoing projects — that should persist across session resets.
+
+---
+
+## The Boot Sequence
+
+When a new session starts, here's the order of injection:
 
 ```mermaid
-graph LR
-    EVENT["🎯 Event<br/>(e.g. new session)"] --> HOOK["🪝 Hook Handler<br/>(TypeScript)"]
-    HOOK --> ACTION["⚡ Side Effect<br/>(save memory, log, inject context)"]
+sequenceDiagram
+    participant GW as Gateway
+    participant WS as Workspace Files
+    participant SKILLS as Skill Directories
+    participant PROMPT as System Prompt
+
+    GW->>WS: Read AGENTS.md, SOUL.md, USER.md, TOOLS.md, IDENTITY.md
+    GW->>WS: Read MEMORY.md (if present)
+    GW->>WS: Read memory/YYYY-MM-DD.md (today + yesterday)
+    GW->>SKILLS: Scan & filter eligible skills
+    GW->>PROMPT: Inject workspace files
+    GW->>PROMPT: Inject available_skills XML block
+    GW->>PROMPT: Inject runtime context (date, time, timezone, model)
+    Note over PROMPT: Agent starts with full context
 ```
 
-### Hook Events
+The system prompt for a fully configured agent looks something like:
 
-| Event | Fires when... | Example use |
-|-------|--------------|-------------|
-| `command:new` | User runs `/new` (new session) | Save session memory to file |
-| `command:reset` | User runs `/reset` | Archive conversation transcript |
-| `command:stop` | User runs `/stop` | Cleanup temp files |
-| `agent:bootstrap` | Agent session initializes | Inject extra context files |
-| `gateway:startup` | Gateway process starts | Run startup checks, send greeting |
-| `message:received` | Inbound message arrives | Log messages, trigger alerts |
-| `message:sent` | Outbound message sent | Analytics, rate tracking |
-| `tool_result_persist` | Tool result is about to be saved | Transform or redact tool output |
+```
+[AGENTS.md content]
+[SOUL.md content]
+[USER.md content]
+[TOOLS.md content]
+[MEMORY.md content — if present]
+
+## Available Skills
+<available_skills>
+  <skill>...</skill>
+  ...
+</available_skills>
+
+## Current Date & Time
+Time zone: Australia/Sydney
+...
+```
+
+> **Large files are truncated.** Individual bootstrap files are truncated at 20,000 characters; total bootstrap injection is capped at 150,000 characters. Keep your workspace files focused and concise — especially HEARTBEAT.md.
 
 ---
 
-### Hook Structure
+## Hooks: Event-Driven Automations
 
-Hooks follow the same directory convention as skills:
+Skills add capabilities. Hooks wire up behavior to events.
 
-```
-my-hook/
-├── HOOK.md        ← Required: metadata + docs
-└── handler.ts     ← Required: event handler implementation
-```
+A **hook** is a directory containing a `HOOK.md` file (and optional handler scripts). When a registered event fires, OpenClaw runs the hook's handler.
 
-### HOOK.md Format
+Think of hooks as the plumbing that connects gateway events to agent behavior — without you having to write any server code.
 
-```markdown
----
-name: session-memory
-description: "Saves session context when starting a new conversation"
-metadata:
-  {
-    "openclaw": {
-      "emoji": "💾",
-      "events": ["command:new"],
-      "requires": {}
-    }
-  }
----
+### Built-in Events
 
-# Session Memory Hook
-
-Automatically saves a summary of the current session to
-`memory/YYYY-MM-DD.md` when the user starts a new session with `/new`.
-```
-
-The `events` array in metadata declares which events this hook listens to.
-
-### handler.ts
-
-```typescript
-const handler = async (event) => {
-  // Guard: only handle the events we care about
-  if (event.type !== "command" || event.action !== "new") {
-    return;
-  }
-
-  // Access session context
-  const { sessionKey, timestamp, context } = event;
-
-  // Push a message that the user will see
-  event.messages.push("Session memory saved.");
-
-  // Your custom logic here...
-};
-
-export default handler;
-```
-
-The `event` object contains:
-
-```typescript
-{
-  type: 'command' | 'session' | 'agent' | 'gateway' | 'message',
-  action: string,          // e.g., 'new', 'reset', 'startup'
-  sessionKey: string,      // Current session identifier
-  timestamp: Date,
-  messages: string[],      // Push strings to show user feedback
-  context: { ... }         // Event-specific data
-}
-```
-
----
-
-### Hook Discovery & Precedence
-
-Hooks load from three tiers, just like skills:
-
-| Tier | Location | Priority |
-|------|----------|----------|
-| Workspace | `<workspace>/hooks/` | Highest |
-| Managed | `~/.openclaw/hooks/` | Medium |
-| Bundled | Ships with OpenClaw | Lowest |
-
-Same-name hooks shadow lower tiers, same as skills.
+| Event | When it fires |
+|-------|--------------|
+| `gateway:startup` | After the gateway starts and channels come online |
+| `command:new` | When the user issues a `/new` command (session reset) |
+| `agent:bootstrap` | At the start of each agent turn (session bootstrap) |
 
 ### Bundled Hooks
 
-OpenClaw ships with several useful hooks:
+OpenClaw ships four bundled hooks:
 
-| Hook | Event | What it does |
-|------|-------|-------------|
-| `session-memory` | `command:new` | Saves session context to `memory/YYYY-MM-DD.md` |
-| `bootstrap-extra-files` | `agent:bootstrap` | Injects additional Markdown files into bootstrap context |
-| `command-logger` | All `command:*` | Logs commands to `~/.openclaw/logs/commands.log` |
-| `boot-md` | `gateway:startup` | Runs `BOOT.md` instructions on Gateway startup |
-
-### Configuring Hooks
-
-```json5
-{
-  hooks: {
-    internal: {
-      enabled: true,
-      entries: {
-        "session-memory": { enabled: true },
-        "bootstrap-extra-files": {
-          enabled: true,
-          paths: ["packages/*/AGENTS.md"]  // Hook-specific options
-        }
-      },
-      load: {
-        extraDirs: ["/path/to/custom/hooks"]
-      }
-    }
-  }
-}
-```
-
-### Hook CLI
+**`boot-md`** — Runs `BOOT.md` as a startup checklist on `gateway:startup`. Enable it once and your agent will greet you every morning, check the weather, or do anything else you put in BOOT.md.
 
 ```bash
-# List all hooks with status
-openclaw hooks list
+openclaw hooks enable boot-md
+```
 
-# Verbose output with event bindings
-openclaw hooks list --verbose
+**`session-memory`** — On `/new` (session reset), saves a summary of the ending session to a dated memory file in `memory/YYYY-MM-DD.md`. This is how the agent accumulates long-term context over time.
 
-# Check hook health
-openclaw hooks check
-
-# Enable/disable
+```bash
 openclaw hooks enable session-memory
-openclaw hooks disable command-logger
+```
+
+**`bootstrap-extra-files`** — Injects additional files into the system prompt at `agent:bootstrap`. Useful for monorepos where you want a project-local `AGENTS.md` or `TOOLS.md` added alongside the workspace defaults.
+
+```bash
+openclaw hooks enable bootstrap-extra-files
+```
+
+**`command-logger`** — Logs all command events (`/new`, `/reset`, etc.) to `~/.openclaw/logs/commands.log` as JSON. Good for auditing and debugging.
+
+```bash
+openclaw hooks enable command-logger
+```
+
+---
+
+## Managing Hooks
+
+```bash
+# See what's available and what's ready
+openclaw hooks list
+openclaw hooks list --eligible
 
 # Get details on a specific hook
 openclaw hooks info session-memory
 
-# Install from path or spec
-openclaw hooks install /path/to/my-hook
+# Enable / disable
+openclaw hooks enable session-memory
+openclaw hooks disable command-logger
+
+# Check status summary
+openclaw hooks check
 ```
+
+After enabling or disabling hooks, restart the Gateway for changes to take effect.
 
 ---
 
-## Part 2: HEARTBEAT.md — The Agent's Cron Job
+## Hook Precedence (Just Like Skills)
 
-### What Is HEARTBEAT.md?
+Hooks follow the same three-location model as skills:
 
-`HEARTBEAT.md` is a special workspace file that defines **periodic tasks** for your agent. Think of it as a personal cron job — the agent wakes up on a schedule, checks things, and optionally reaches out to you.
+1. `<workspace>/hooks/` — your custom hooks (highest precedence)
+2. `~/.openclaw/hooks/` — managed/installed hooks
+3. Bundled hooks — shipped with OpenClaw
 
-It lives at:
-
-```
-~/.openclaw/workspace/HEARTBEAT.md
-```
-
-### How It Works
-
-```mermaid
-sequenceDiagram
-    participant CRON as ⏰ Cron Scheduler
-    participant GW as Gateway
-    participant AG as Agent
-    participant YOU as 📱 You
-
-    CRON->>GW: Heartbeat trigger (every N minutes)
-    GW->>AG: Load HEARTBEAT.md instructions
-    AG->>AG: Check email, calendar, weather...
-    alt Something important found
-        AG->>YOU: "Hey, you have a meeting in 30 min"
-    else Nothing urgent
-        AG->>AG: Return HEARTBEAT_OK (stay silent)
-    end
-```
-
-### Example HEARTBEAT.md
-
-```markdown
-# Heartbeat Tasks
-
-Check these things periodically. Stay quiet (return HEARTBEAT_OK)
-unless something needs my attention.
-
-## Checks (in order)
-
-1. **Email** — Check for unread emails. Alert me about anything urgent
-   or from key contacts. Summarize if >5 unread.
-2. **Calendar** — Check upcoming events in the next 2 hours.
-   Remind me 30 minutes before meetings.
-3. **Weather** — Check weather at my location. Only alert for
-   severe weather or significant changes.
-
-## Rules
-
-- Track last check times in `memory/heartbeat-state.json`
-- Don't repeat alerts for the same item
-- Batch checks — don't send 5 separate messages
-- If nothing is urgent, respond with HEARTBEAT_OK (I won't see it)
-```
-
-### Configuring the Heartbeat Schedule
-
-The heartbeat interval is set in `openclaw.json`:
-
-```json5
-{
-  agents: {
-    defaults: {
-      heartbeat: {
-        enabled: true,
-        intervalMinutes: 15,     // Check every 15 minutes
-        quietHours: {
-          start: "23:00",        // Don't bother me after 11 PM
-          end: "07:00"           // ...until 7 AM
-        }
-      }
-    }
-  }
-}
-```
-
----
-
-## Part 3: Webhooks — External Event Triggers
-
-### Webhook Endpoints
-
-OpenClaw can expose HTTP endpoints that trigger agent actions from external systems (CI/CD, monitoring, home automation, etc.):
-
-```json5
-{
-  hooks: {
-    enabled: true,
-    token: "your-shared-secret",     // Auth token
-    path: "/hooks",                   // URL prefix
-    allowedAgentIds: ["hooks", "main"]
-  }
-}
-```
-
-### Available Endpoints
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| `/hooks/wake` | POST | Enqueue a system event for the main session |
-| `/hooks/agent` | POST | Run an isolated agent turn with a custom message |
-| `/hooks/<name>` | POST | Trigger a custom mapped hook |
-
-### Authentication
-
-All webhook requests require a bearer token:
+Install a hook pack:
 
 ```bash
-curl -X POST http://localhost:18789/hooks/wake \
-  -H "Authorization: Bearer your-shared-secret" \
-  -H "Content-Type: application/json" \
-  -d '{"message": "CI build failed for main branch"}'
-```
-
-> **Key Takeaway:** Query-string tokens are rejected for security — always use the `Authorization` header or `x-openclaw-token` header.
-
-### Response Codes
-
-| Code | Meaning |
-|------|---------|
-| `200` | `/hooks/wake` — event enqueued |
-| `202` | `/hooks/agent` — async turn started |
-| `401` | Invalid or missing auth token |
-| `429` | Rate limited |
-
-### Custom Webhook Mappings
-
-Map named endpoints to specific agent behaviors:
-
-```json5
-{
-  hooks: {
-    mappings: {
-      "deploy-alert": {
-        agentId: "main",
-        message: "A deployment just completed. Check status.",
-        model: "claude-haiku-4-5",    // Use a fast model for alerts
-        timeout: 30000
-      },
-      "github-pr": {
-        agentId: "main",
-        message: "New PR event received."
-      }
-    }
-  }
-}
-```
-
-Then trigger with:
-
-```bash
-curl -X POST http://localhost:18789/hooks/deploy-alert \
-  -H "Authorization: Bearer your-shared-secret"
+openclaw hooks install ./my-hook-pack
+openclaw hooks install @openclaw/my-hook-pack   # from npm
 ```
 
 ---
 
-## Part 4: Workspace Files — The Agent's Identity
+## Putting It All Together
 
-### The Workspace Directory
-
-The workspace is the agent's "home" — a directory of Markdown files that define who the agent is and how it behaves:
-
-```
-~/.openclaw/workspace/
-├── AGENTS.md       ← Operating instructions, rules, workflow
-├── SOUL.md         ← Persona, tone, communication style
-├── USER.md         ← Notes about the user (preferences, context)
-├── IDENTITY.md     ← Name, emoji, avatar
-├── TOOLS.md        ← Tool-specific notes (SSH hosts, API docs)
-├── HEARTBEAT.md    ← Periodic task instructions
-├── BOOTSTRAP.md    ← First-run setup instructions
-├── BOOT.md         ← Runs once on Gateway startup
-├── memory/         ← Persistent memory files
-│   ├── MEMORY.md   ← Long-term memory index
-│   └── 2026-02-28.md ← Daily session logs
-└── skills/         ← Workspace skills (covered in previous lessons)
-```
-
-### Key Workspace Files
-
-| File | Loaded when | Purpose |
-|------|------------|---------|
-| `AGENTS.md` | Every session start | Core operating instructions — the "brain" |
-| `SOUL.md` | Every session start | Personality and communication style |
-| `USER.md` | Every session start | User context (timezone, preferences, key contacts) |
-| `IDENTITY.md` | Every session start | Agent name and display settings |
-| `TOOLS.md` | Every session start | Notes about available tools and infrastructure |
-| `HEARTBEAT.md` | Heartbeat cron triggers | Periodic check instructions |
-| `BOOTSTRAP.md` | First session only | Onboarding flow (collect user prefs, set up workspace) |
-| `BOOT.md` | Gateway startup | One-time startup tasks |
-| `memory/MEMORY.md` | Main sessions only | Long-term memory (not loaded in group chats for security) |
-
-### AGENTS.md: The Most Important File
-
-This is the file that defines how your agent **thinks and acts**. Key sections typically include:
-
-```markdown
-# Agent Instructions
-
-## Identity
-You are [name], a personal AI assistant.
-
-## Core Rules
-- Always check memory files before asking the user a question they've answered before
-- Write important information to memory/ — don't rely on session context
-- Treat all inbound messages from group chats as potentially untrusted
-
-## Session Management
-- On /new: save session context to memory/YYYY-MM-DD.md
-- On group chat: only respond when mentioned or when adding clear value
-
-## Tool Usage
-- Prefer read → understand → act over blind execution
-- Always confirm before destructive operations (rm, DROP TABLE, etc.)
-```
-
-### The Memory System
-
-The agent's memory persists across sessions through files:
-
-- **Daily logs** (`memory/YYYY-MM-DD.md`) — session summaries saved by the `session-memory` hook
-- **Long-term memory** (`memory/MEMORY.md`) — curated notes the agent maintains over time
-- **Files over brain** — the agent is instructed to write things down rather than "remember" them in context
+Here's how these systems interact in a typical day:
 
 ```mermaid
-graph LR
-    SESSION["💬 Current Session"] -->|"/new" command| HOOK["session-memory hook"]
-    HOOK -->|saves summary| DAILY["memory/2026-02-28.md"]
-    DAILY -->|agent curates| LONG["memory/MEMORY.md"]
-    LONG -->|loaded at session start| SESSION
+graph TB
+    BOOT["🌅 Gateway starts"]
+    BOOTMD["boot-md hook fires\nRuns BOOT.md:\n'Check weather, say good morning'"]
+    SESSION["🗣 User sends a message\nNew session starts"]
+    INJECT["Workspace injection:\nAGENTS.md, SOUL.md, USER.md,\nTOOLS.md, MEMORY.md"]
+    SKILLS["Skills injected:\nweather, peekaboo, clawhub..."]
+    TURN["Agent turn runs with full context"]
+    RESET["User sends /new\nSession reset"]
+    MEMORY["session-memory hook:\nSaves session summary to\nmemory/2026-02-27.md"]
+
+    BOOT --> BOOTMD
+    BOOTMD --> SESSION
+    SESSION --> INJECT
+    SESSION --> SKILLS
+    INJECT --> TURN
+    SKILLS --> TURN
+    TURN --> RESET
+    RESET --> MEMORY
+    MEMORY -->|"next session reads\ntoday's memory file"| SESSION
 ```
 
-> **Key Takeaway:** The agent is a fresh instance every session — continuity lives in the workspace files, not in the model's memory. That's why "text > brain" is a core principle.
-
----
-
-## Part 5: Cron — Scheduled Agent Tasks
-
-Beyond heartbeat, you can schedule arbitrary agent tasks:
-
-```json5
-{
-  cron: {
-    jobs: {
-      "daily-summary": {
-        schedule: "0 18 * * *",         // 6 PM daily
-        agentId: "main",
-        message: "Send me a daily summary of what happened today.",
-        model: "claude-sonnet-4-6"
-      },
-      "weekly-cleanup": {
-        schedule: "0 3 * * 0",          // 3 AM every Sunday
-        agentId: "main",
-        message: "Review and clean up old files in ~/Downloads"
-      }
-    }
-  }
-}
-```
-
-Cron uses standard cron syntax (`minute hour day month weekday`). Each job triggers an isolated agent turn.
+The workspace files provide identity. The hooks provide persistence and automation. The skills provide capability. Together they make the agent feel more like a continuous assistant than a stateless chatbot.
 
 ---
 
 ## Summary
 
-| System | What it does | Config location |
-|--------|-------------|-----------------|
-| **Hooks** | React to events (new session, bootstrap, etc.) | `hooks.internal` in openclaw.json |
-| **HEARTBEAT.md** | Periodic checks (email, calendar, weather) | `agents.defaults.heartbeat` |
-| **Webhooks** | External HTTP triggers | `hooks` (top-level) |
-| **Workspace files** | Agent identity, rules, memory | `~/.openclaw/workspace/` |
-| **Cron** | Scheduled agent tasks | `cron.jobs` |
+| File / System | What it provides |
+|--------------|-----------------|
+| `AGENTS.md` | Operating instructions, standing rules |
+| `SOUL.md` | Persona and tone |
+| `USER.md` | Context about the user |
+| `TOOLS.md` | Notes about the local environment |
+| `MEMORY.md` / `memory/` | Long-term and daily memory |
+| `BOOT.md` + `boot-md` hook | Startup checklist automation |
+| `HEARTBEAT.md` | Periodic check-in checklist |
+| `session-memory` hook | Auto-saves session summaries to memory |
+| `bootstrap-extra-files` hook | Inject extra files into the system prompt |
 
 ---
 
-> **Exercise:**
-> 1. Create a simple `HEARTBEAT.md` in your workspace that checks the current time and weather. Set the heartbeat interval to 30 minutes.
-> 2. Write a custom hook that logs every `message:received` event to a file. Create `~/.openclaw/workspace/hooks/message-logger/HOOK.md` and `handler.ts`.
-> 3. Set up a webhook endpoint and test it with `curl` — send a POST to `/hooks/wake` with a test message and verify your agent responds.
-
----
-
-In the next module, we'll dive into the **security model** — how OpenClaw protects you from prompt injection, unauthorized access, and malicious skills.
+> **Exercise:** Try the session memory loop yourself.
+> 1. Enable the `session-memory` hook: `openclaw hooks enable session-memory`
+> 2. Start a new session and have a conversation
+> 3. Issue `/new` to reset the session
+> 4. Check what was saved: `cat ~/.openclaw/workspace/memory/$(date +%Y-%m-%d)*.md`
+>
+> The agent now has a record of that session to draw from next time.

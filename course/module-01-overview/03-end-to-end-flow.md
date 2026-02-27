@@ -1,19 +1,19 @@
-# End-to-End Message Flow
+# End-to-end message flow
 
-Let's trace a single message — "What's the weather like in Sydney?" — from the moment you type it on your phone to the moment you get a response. This will make everything concrete.
-
----
-
-## The Setup
-
-- You're messaging via **Telegram**
-- Your agent is running on a **Mac Mini**
-- The LLM is **Claude Sonnet 4.6** (Anthropic)
-- A **weather skill** is loaded that adds a `get_weather` tool
+Let's trace a single message — "What's the weather like in Sydney?" — from the moment you type it to the moment you get a response. Concrete examples beat abstract explanations.
 
 ---
 
-## Full Flow Diagram
+## The setup
+
+- You're messaging via Telegram
+- Your agent is running on a Mac Mini
+- The LLM is Claude Sonnet 4.6 (Anthropic)
+- A weather skill is loaded that adds a `get_weather` tool
+
+---
+
+## Full flow diagram
 
 ```mermaid
 sequenceDiagram
@@ -50,60 +50,58 @@ sequenceDiagram
     TG->>You: "It's 22°C and partly cloudy in Sydney..."
 ```
 
-Let's walk through each step in detail.
-
 ---
 
-## Step 1: You Send a Message
+## Step 1: You send a message
 
-You type in Telegram on your phone and hit send. Telegram's servers receive the message and need to deliver it to your bot.
+You type in Telegram and hit send. Telegram's servers receive the message and deliver it to your bot.
 
 ---
 
 ## Step 2: Delivery to Gateway
 
-Telegram delivers the message via one of two mechanisms:
+Telegram delivers the message via one of two mechanisms.
 
-**Long polling** (default for most setups):
+With long polling (the default in most setups):
 ```
 Gateway → Telegram: "any updates since offset X?"
-Telegram → Gateway: [update: message from user 123456789]
+Telegram → Gateway: [update: message from user 821071206]
 ```
 
-**Webhook** (faster, requires HTTPS endpoint):
+With a webhook (faster, requires HTTPS endpoint):
 ```
 Telegram → Gateway: POST /webhook {update: message...}
 ```
 
-grammY (the Telegram library) handles this transparently. Either way, the Gateway receives a structured `Update` object.
+grammY handles this transparently. Either way, the Gateway receives a structured `Update` object.
 
 ---
 
-## Step 3: Channel Manager Processes It
+## Step 3: Channel Manager processes it
 
 The Telegram channel plugin:
 
-1. **Validates** the update (is it a message? from whom?)
-2. **Checks the allowlist**: Is `123456789` in `channels.telegram.allowFrom`?
+1. Validates the update (is it a message? from whom?)
+2. Checks the allowlist: Is `821071206` in `channels.telegram.allowFrom`?
    - If not: sends a pairing code and drops the message
-3. **Wraps** it in OpenClaw's `InboundMessage` format:
+3. Wraps it in OpenClaw's `InboundMessage` format:
 
 ```javascript
 {
   text: "What's the weather like in Sydney?",
-  sender: "telegram:123456789",
-  chat: "telegram:dm:123456789",
+  sender: "telegram:821071206",
+  chat: "telegram:dm:821071206",
   channel: "telegram",
   timestamp: 1709042400000,
   media: null
 }
 ```
 
-4. **Marks the inbound content as untrusted** — any LLM prompt will have this message wrapped in safety markers to prevent prompt injection.
+4. Marks the inbound content as untrusted. The LLM prompt will have this message wrapped in safety markers to prevent prompt injection.
 
 ---
 
-## Step 4: Session Lookup
+## Step 4: Session lookup
 
 The Gateway determines the session key based on `dmScope`. With the default `main` scope:
 
@@ -115,11 +113,11 @@ The Session Store looks up `~/.openclaw/agents/main/sessions/sessions.json`:
 - Found: loads the existing session ID
 - Not found: creates a new session
 
-It then loads (or starts) the **JSONL transcript file** for this session. This file contains every previous message and tool call in this conversation.
+It then loads (or starts) the JSONL transcript file for this session — every previous message and tool call in this conversation.
 
 ---
 
-## Step 5: Agent Turn Begins
+## Step 5: Agent turn begins
 
 The Agent Runtime starts a new turn with:
 
@@ -131,7 +129,7 @@ The Agent Runtime starts a new turn with:
 }
 ```
 
-**Bootstrap injection**: If this is the first turn of a new session, the workspace files (AGENTS.md, SOUL.md, TOOLS.md, USER.md, IDENTITY.md) are prepended to the system prompt.
+On the first turn of a new session, the workspace files (AGENTS.md, SOUL.md, TOOLS.md, USER.md, IDENTITY.md) are prepended to the system prompt. This is called bootstrap injection.
 
 The system prompt looks something like:
 
@@ -156,7 +154,7 @@ Time zone: Australia/Sydney
 
 ---
 
-## Step 6: First LLM Call
+## Step 6: First LLM call
 
 The agent calls Anthropic's Messages API:
 
@@ -182,7 +180,7 @@ Content-Type: application/json
 }
 ```
 
-Anthropic returns a **tool call**:
+Anthropic returns a tool call:
 
 ```json
 {
@@ -200,12 +198,12 @@ Anthropic returns a **tool call**:
 
 ---
 
-## Step 7: Tool Execution
+## Step 7: Tool execution
 
 The Tool Engine receives the `get_weather` call. Based on tool policy:
 
-- **Sandboxed tools** (exec): run in a restricted environment
-- **Skill tools**: run their registered handler function
+- Sandboxed tools (exec): run in a restricted environment
+- Skill tools: run their registered handler function
 
 The weather skill calls its API and returns:
 
@@ -222,7 +220,7 @@ The weather skill calls its API and returns:
 
 ---
 
-## Step 8: Second LLM Call
+## Step 8: Second LLM call
 
 The tool result is appended to the conversation and sent back to Anthropic:
 
@@ -242,7 +240,7 @@ Claude now responds with text:
 
 ---
 
-## Step 9: Transcript Append
+## Step 9: Transcript append
 
 The completed turn is appended to the JSONL transcript:
 
@@ -257,30 +255,27 @@ Token counts are updated in `sessions.json`.
 
 ---
 
-## Step 10: Response Delivery
+## Step 10: Response delivery
 
 The response goes back through the Channel Manager → grammY → Telegram API → your phone.
 
-If **block streaming** is enabled, chunks appear as the model generates them. Otherwise (default), the full response sends at once.
+If block streaming is enabled, chunks appear as the model generates them. Otherwise (the default), the full response sends at once.
 
 ---
 
-## What Makes This Fast?
+## What makes this fast?
 
-- **In-memory session**: no DB query per turn — transcript is loaded once per session
-- **Single process**: no service hops — all components live in one Node process
-- **Streaming**: responses can appear progressively (when block streaming is on)
-- **Local execution**: tool calls run on your machine, not a remote container
+There's no database query per turn — the transcript loads once per session and stays in memory. All components live in one Node process, so there are no service hops. Tool calls run on your machine, not a remote container. Responses can stream progressively if you have block streaming enabled.
 
 ---
 
-## What Could Go Wrong?
+## What could go wrong?
 
 | Scenario | What happens |
 |----------|-------------|
 | Sender not on allowlist | Pairing code sent, message dropped |
 | LLM API rate limited | Exponential backoff retry (configurable) |
-| Tool execution fails | Error returned as tool result, agent gets to decide next step |
+| Tool execution fails | Error returned as tool result; agent decides next step |
 | Context window full | Auto-compaction kicks in, older history summarized |
 | Network disconnect | Channel reconnects with exponential backoff |
 | Gateway crash | Daemon supervisor (launchd/systemd) restarts it |
@@ -304,8 +299,8 @@ Typical latency: **1–5 seconds** (dominated by LLM API time).
 
 ---
 
-> **Exercise:** Look at your own session transcript. Open `~/.openclaw/agents/main/sessions/` and find the latest `.jsonl` file. Open it and read through a few turns. Notice how tool calls and tool results are structured.
+> **Exercise:** Look at your own session transcript. Open `~/.openclaw/agents/main/sessions/` and find the latest `.jsonl` file. Read through a few turns and notice how tool calls and tool results are structured.
 
 ---
 
-In the next module, we'll go deep on the **Gateway Architecture** — the WebSocket control plane, session management, and how channels plug in.
+The next module goes deep on the Gateway: the WebSocket control plane, session management, and how channels plug in.

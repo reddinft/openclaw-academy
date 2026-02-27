@@ -1,10 +1,10 @@
-# Architecture Overview
+# Architecture overview
 
-OpenClaw's architecture is built around a single central concept: **one Gateway, many surfaces**.
+OpenClaw's architecture is built around a single central concept: one Gateway, many surfaces.
 
 ---
 
-## Big Picture
+## Big picture
 
 ```mermaid
 graph TB
@@ -13,7 +13,7 @@ graph TB
         TG[Telegram<br/>via grammY]
         DC[Discord<br/>via Carbon]
         SL[Slack<br/>via Bolt]
-        IM[iMessage<br/>via AppleScript]
+        IM[iMessage<br/>via BlueBubbles]
         WC[WebChat]
     end
 
@@ -56,7 +56,7 @@ graph TB
     Nodes <-->|WebSocket| GW
 ```
 
-The Gateway is the **hub**. Everything else connects to it.
+The Gateway is the hub. Everything else connects to it.
 
 ---
 
@@ -64,12 +64,12 @@ The Gateway is the **hub**. Everything else connects to it.
 
 The Gateway is a long-lived Node.js process. Its responsibilities:
 
-1. **Own channel connections** — maintains persistent connections to WhatsApp, Telegram bots, Discord servers, etc.
-2. **Route inbound messages** → session → agent
-3. **Manage sessions** — stores conversation context per-user, per-channel, per-group
-4. **Run the agent** — invokes the LLM, processes tool calls, streams responses
-5. **Expose a WebSocket API** — for control clients (macOS app, CLI, Web UI) and nodes (iOS, Android)
-6. **Serve the Canvas** — an agent-driven visual workspace
+1. Owns persistent connections to WhatsApp, Telegram bots, Discord servers, etc.
+2. Routes inbound messages to the right session and agent
+3. Manages sessions, storing conversation context per-user, per-channel, per-group
+4. Runs the agent: invokes the LLM, processes tool calls, streams responses
+5. Exposes a WebSocket API for control clients (macOS app, CLI, Web UI) and nodes (iOS, Android)
+6. Serves the Canvas, an agent-driven visual workspace
 
 ```
 Gateway listens on:
@@ -79,11 +79,11 @@ Gateway listens on:
 
 ---
 
-## Component Deep Dive
+## Component deep dive
 
 ### Channel Manager
 
-Each channel has a **plugin** that handles the platform-specific protocol:
+Each channel has a plugin that handles the platform-specific protocol:
 
 | Channel | Library | Notes |
 |---------|---------|-------|
@@ -101,7 +101,7 @@ When a message arrives on any channel, the Channel Manager:
 ### Session Manager
 
 Sessions are the unit of conversation continuity. A session is:
-- A unique key (e.g., `agent:main:telegram:dm:123456789`)
+- A unique key (e.g., `agent:main:telegram:dm:821071206`)
 - A JSONL transcript file (`~/.openclaw/agents/<id>/sessions/<SessionId>.jsonl`)
 - Metadata: token counts, last updated, channel origin
 
@@ -115,6 +115,14 @@ agent:<agentId>:<channel>:<type>:<id>
                └── telegram, discord, whatsapp, etc.
 ```
 
+When `dmScope` is set to `main` (the default), all direct messages collapse into a single shared session regardless of channel:
+
+```
+agent:main:main
+```
+
+This is the key you'll see most often in single-user setups.
+
 ### Agent Runtime
 
 The agent is built on **pi-mono**, a coding agent framework. OpenClaw wraps it with:
@@ -124,7 +132,7 @@ The agent is built on **pi-mono**, a coding agent framework. OpenClaw wraps it w
 - Compaction (context window management)
 - Memory flush (pre-compaction note-writing)
 
-The agent runs **one turn at a time per session**. If a new message arrives while a turn is running, it's queued according to the queue mode (steer/followup/collect).
+The agent runs one turn at a time per session. If a new message arrives while a turn is running, it queues according to the queue mode (steer/followup/collect).
 
 ### Tool Engine
 
@@ -149,7 +157,7 @@ Skills can register additional tools.
 
 ---
 
-## WebSocket Control Plane
+## WebSocket control plane
 
 Clients (macOS app, CLI, Web UI) connect to the Gateway via WebSocket. The protocol is typed and schema-validated:
 
@@ -168,13 +176,13 @@ sequenceDiagram
 ```
 
 The protocol uses:
-- **Requests** → **Responses** (1:1 with request ID)
-- **Events** (server push, not tied to a request)
-- **Idempotency keys** on mutating requests to safely retry
+- Requests paired with Responses (matched by request ID)
+- Events (server push, not tied to a request)
+- Idempotency keys on mutating requests to safely retry
 
 ---
 
-## Nodes: The Mobile Extension
+## Nodes: the mobile extension
 
 Nodes (iOS, Android, macOS) connect to the same WebSocket as clients, but declare `role: "node"`. They provide:
 - Camera feeds (photos/video)
@@ -183,11 +191,11 @@ Nodes (iOS, Android, macOS) connect to the same WebSocket as clients, but declar
 - Canvas rendering (the visual workspace)
 - Voice input/output (Talk Mode)
 
-Nodes are **paired** — they go through a one-time pairing approval flow. Once paired, they get a device token for subsequent connects.
+Nodes are paired through a one-time approval flow. Once paired, they get a device token for subsequent connections.
 
 ---
 
-## State Storage
+## State storage
 
 All state lives in `~/.openclaw/`:
 
@@ -209,7 +217,7 @@ No external database. No Redis. No PostgreSQL. Just files.
 
 ---
 
-## Security Boundaries
+## Security boundaries
 
 ```mermaid
 graph LR
@@ -226,30 +234,30 @@ graph LR
     GW -->|"sandboxed exec"| TOOLS
 ```
 
-Key security model:
-- **Inbound messages are untrusted** by default — wrapped in `EXTERNAL_UNTRUSTED_CONTENT` markers
-- **Pairing + allowlists** gate who can talk to your agent
-- **Tool policy** controls what the agent can execute (sandbox vs elevated)
-- **LLM provider** is trusted for tool call structure but not for prompt content
+The security model in brief:
+- Inbound messages are untrusted by default, wrapped in `EXTERNAL_UNTRUSTED_CONTENT` markers
+- Pairing and allowlists gate who can talk to your agent
+- Tool policy controls what the agent can execute (sandbox vs elevated)
+- The LLM provider is trusted for tool call structure, but not for prompt content
 
-We'll cover security in depth in Module 6.
+Security gets its own module (Module 6).
 
 ---
 
-## How it All Fits Together
+## How it all fits together
 
 When you send a message on Telegram:
 
-1. **Telegram** delivers it to the Gateway's grammY bot
-2. **Gateway** checks: is this sender approved? (pairing/allowlist)
-3. **Channel Manager** normalizes it to an internal `InboundMessage`
-4. **Session Manager** finds (or creates) the session for this conversation
-5. **Agent** adds the message to the session transcript, calls the LLM
-6. **LLM** responds with text or tool call requests
-7. **Tool Engine** executes requested tool calls (sandboxed)
-8. **Agent** feeds tool results back to the LLM, continues until done
-9. **Channel Manager** delivers the final response back to Telegram
-10. **Transcript** updated with the full turn
+1. Telegram delivers it to the Gateway's grammY bot
+2. The Gateway checks: is this sender approved? (pairing/allowlist)
+3. The Channel Manager normalizes it to an internal `InboundMessage`
+4. The Session Manager finds (or creates) the session for this conversation
+5. The Agent adds the message to the session transcript, calls the LLM
+6. The LLM responds with text or tool call requests
+7. The Tool Engine executes requested tool calls (sandboxed)
+8. The Agent feeds tool results back to the LLM, continues until done
+9. The Channel Manager delivers the final response back to Telegram
+10. The transcript is updated with the full turn
 
 This all happens in memory — no round-trips to a database. Fast and local.
 
@@ -260,10 +268,10 @@ This all happens in memory — no round-trips to a database. Fast and local.
 | Layer | Technology | Role |
 |-------|-----------|------|
 | Channels | Platform-specific libs | Inbound/outbound messaging |
-| Gateway | Node.js, Express, WS | Control plane, session mgmt |
+| Gateway | Node.js, HTTP, WS | Control plane, session mgmt |
 | Agent | pi-mono runtime | LLM calls, tool execution |
 | Storage | JSONL files | Session transcripts, state |
 | Control | WebSocket API | CLI, macOS app, Web UI |
 | Nodes | WS + device pairing | Mobile/companion devices |
 
-In the next lesson, we'll trace a single message through the entire system, step by step.
+The next lesson traces a single message through the entire system, step by step.

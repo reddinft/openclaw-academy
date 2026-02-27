@@ -15,9 +15,9 @@ lessons:
     duration_min: 15
   - slug: memory-and-compaction
     title: "Memory & Compaction"
-    file: 03-memory-compaction.md
+    file: 03-memory-and-compaction.md
     duration_min: 12
   - slug: multi-agent-routing
     title: "Multi-Agent Routing"
-    file: 04-multi-agent.md
+    file: 04-multi-agent-routing.md
     duration_min: 10

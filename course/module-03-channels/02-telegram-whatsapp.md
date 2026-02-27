@@ -1,421 +1,291 @@
-# Telegram & WhatsApp
+# Telegram and WhatsApp
 
-Telegram and WhatsApp are the two most popular channels for OpenClaw. Together, they cover most personal messaging use cases. But they work very differently under the hood — Telegram uses a bot API, while WhatsApp uses a reverse-engineered web client. Let's dig into both.
+These are the two channels most people start with. Telegram is the fastest setup — five minutes from zero to a working bot. WhatsApp takes a bit more ceremony but gets your agent into the app half the planet already uses.
 
 ---
 
-## Telegram: The Bot API Channel
+## Telegram
 
-Telegram is the **easiest channel to set up** — create a bot with BotFather, paste the token, and you're live.
+Telegram connects via the **Bot API** using grammY under the hood. You create a bot token, drop it in config, and the Gateway starts polling for messages.
 
-### How it works
+### Step 1: Create a bot in BotFather
 
-OpenClaw uses **grammY**, a TypeScript framework for the Telegram Bot API. The bot connects via long-polling (default) or webhooks.
+Open Telegram and search for `@BotFather` (the official one — verify it's the real one). Run:
 
-```mermaid
-sequenceDiagram
-    participant U as You (Telegram)
-    participant TG as Telegram Servers
-    participant GM as grammY (Gateway)
-    participant GW as Gateway Core
-
-    U->>TG: Send message
-    TG-->>GM: getUpdates response (long poll)
-    GM->>GW: InboundMessage
-    GW->>GW: Agent processes...
-    GW->>GM: Reply text
-    GM->>TG: sendMessage API
-    TG->>U: Response appears
+```
+/newbot
 ```
 
-### Setup
+Follow the prompts. At the end, BotFather hands you a token that looks like:
 
-1. **Create a bot** via [@BotFather](https://t.me/BotFather) on Telegram
-2. Copy the bot token
-3. Add it to your config:
+```
+123456789:AAF8yXn_AbCdEfGhIjKlMnOpQrStUvWxYz0
+```
+
+Save this. It's the only credential Telegram needs.
+
+### Step 2: Configure the token
+
+Add it to `~/.openclaw/openclaw.json`:
 
 ```json5
 {
   channels: {
     telegram: {
-      botToken: "123456789:ABCdefGHIjklMNOpqrsTUVwxyz",
-      dmPolicy: "pairing",
-    },
-  },
+      enabled: true,
+      botToken: "123456789:AAF8yXn_AbCdEfGhIjKlMnOpQrStUvWxYz0",
+      dmPolicy: "pairing"
+    }
+  }
 }
 ```
 
-4. Restart the Gateway: `openclaw gateway restart`
-5. Message your bot — it will send you a pairing code
+Or use the environment variable (useful on servers where you don't want secrets in config files):
 
-### Polling vs Webhooks
+```bash
+export TELEGRAM_BOT_TOKEN="123456789:AAF..."
+```
 
-| Mode | How it works | Best for |
-|------|-------------|----------|
-| **Long polling** (default) | Gateway asks Telegram "any updates?" every few seconds | Home servers, NAT'd networks |
-| **Webhooks** | Telegram POSTs updates to your HTTPS endpoint | VPS with public IP, lower latency |
+### Step 3: Start the Gateway and pair
 
-Long polling works behind NAT (no public IP needed) — this is why it's the default. Webhooks are faster but require an HTTPS endpoint:
+```bash
+openclaw gateway
+```
+
+The Gateway connects to Telegram's servers via long polling by default — the Gateway asks "any new messages?" every few seconds. You don't need a public HTTPS endpoint for this.
+
+DM your bot in Telegram. It will reply with a pairing code. Then:
+
+```bash
+openclaw pairing list telegram
+openclaw pairing approve telegram <CODE>
+```
+
+Now you're in.
+
+### Polling vs webhook
+
+Long polling works for most setups. Webhooks are faster but require a public HTTPS URL:
 
 ```json5
 {
   channels: {
     telegram: {
       botToken: "...",
-      webhookUrl: "https://your-server.com/telegram-webhook",
-      webhookSecret: "a-random-secret",
-      webhookPath: "/telegram-webhook",
-    },
-  },
+      webhookUrl: "https://your-domain.com/telegram-webhook",
+      webhookSecret: "a-random-secret-string"
+    }
+  }
 }
 ```
 
-### Telegram-specific features
+> Use webhooks if you're on a VPS with a domain name, want lower latency, or are handling high message volumes. On a home machine or Pi where your IP isn't stable, stick with long polling.
 
-**Custom commands**: Register slash commands that appear in Telegram's command menu:
+### Finding your Telegram user ID
 
-```json5
-{
-  channels: {
-    telegram: {
-      customCommands: [
-        { command: "backup", description: "Run a git backup" },
-        { command: "generate", description: "Create an image" },
-      ],
-    },
-  },
-}
+The pairing flow handles this automatically, but if you ever need your numeric user ID for the allowlist:
+
+```bash
+# Option 1: watch the gateway logs
+openclaw logs --follow
+# DM your bot — you'll see from.id in the log
+
+# Option 2: call the Bot API directly
+curl "https://api.telegram.org/bot<YOUR_TOKEN>/getUpdates"
 ```
-
-**Streaming responses**: Telegram supports live response editing — the agent's reply updates in real-time as it generates:
-
-```json5
-{
-  channels: {
-    telegram: {
-      streaming: "partial",  // off | partial | block | progress
-    },
-  },
-}
-```
-
-This uses Telegram's `editMessageText` API — the bot sends an initial message, then edits it as more text arrives.
-
-**Reply threading**: Control how the bot threads replies:
-
-```json5
-{
-  channels: {
-    telegram: {
-      replyToMode: "first",  // off | first | all
-    },
-  },
-}
-```
-
-- `off`: don't quote-reply to anything
-- `first`: reply to the user's first message in the turn
-- `all`: reply to every message
-
-**Forum topics**: Telegram supergroups can have forum topics. Each topic gets its own session:
-
-```json5
-{
-  channels: {
-    telegram: {
-      groups: {
-        "-1001234567890": {
-          topics: {
-            "42": {
-              requireMention: false,
-              skills: ["search"],
-              systemPrompt: "Focus on search queries.",
-            },
-          },
-        },
-      },
-    },
-  },
-}
-```
-
-### Multi-account Telegram
-
-Run multiple Telegram bots (one per agent):
-
-```json5
-{
-  channels: {
-    telegram: {
-      accounts: {
-        default: {
-          botToken: "123456:ABC...",
-          dmPolicy: "pairing",
-        },
-        alerts: {
-          botToken: "987654:XYZ...",
-          dmPolicy: "allowlist",
-          allowFrom: ["tg:123456789"],
-        },
-      },
-    },
-  },
-}
-```
-
-Each account gets its own bot, its own allowlist, and can be bound to a different agent via `bindings`.
 
 ---
 
-## WhatsApp: The Baileys Channel
+## WhatsApp
 
-WhatsApp is the **most popular channel** but also the most complex. OpenClaw uses **Baileys** — an open-source library that implements the WhatsApp Web protocol.
+WhatsApp uses **Baileys**, an open-source library that implements the WhatsApp Web multi-device protocol. OpenClaw acts as a linked device — the same way WhatsApp Web in your browser works.
 
-### How it works
+### Step 1: Configure access policy first
 
-Unlike Telegram's official bot API, Baileys reverse-engineers WhatsApp Web. Your Gateway acts as a WhatsApp Web client linked to your phone number.
+Before scanning the QR code, set up your access policy so the first message from your phone is accepted:
 
-```mermaid
-sequenceDiagram
-    participant U as You (WhatsApp)
-    participant WA as WhatsApp Servers
-    participant BL as Baileys (Gateway)
-    participant GW as Gateway Core
-
-    U->>WA: Send message
-    WA->>BL: Encrypted message delivery
-    BL->>BL: Decrypt with session keys
-    BL->>GW: InboundMessage
-    GW->>GW: Agent processes...
-    GW->>BL: Reply text
-    BL->>WA: Encrypted outbound
-    WA->>U: Response appears
+```json5
+{
+  channels: {
+    whatsapp: {
+      enabled: true,
+      dmPolicy: "allowlist",
+      allowFrom: ["+61412345678"]  // your E.164 phone number
+    }
+  }
+}
 ```
 
-### Setup: QR Code Pairing
+> OpenClaw recommends using a separate WhatsApp number for the bot — a spare SIM or a number from Google Voice. This keeps your personal WhatsApp separate. Personal-number setups work too, but routing is more complex.
 
-WhatsApp requires **linking** your phone:
+### Step 2: Link via QR
 
 ```bash
 openclaw channels login --channel whatsapp
 ```
 
-This displays a QR code in your terminal. Scan it with WhatsApp on your phone (Settings > Linked Devices > Link a Device). The session state is saved to disk:
+A QR code appears in your terminal. Open WhatsApp on your phone → Linked Devices → Link a Device → scan the QR.
 
-```
-~/.openclaw/credentials/whatsapp/default/
-├── creds.json          ← Session credentials
-└── app-state-*.json    ← WhatsApp app state
-```
+WhatsApp saves the linked session in `~/.openclaw/credentials/whatsapp/`.
 
-Once linked, the Gateway maintains the connection persistently. The WhatsApp session can survive Gateway restarts — credentials are loaded from disk.
-
-### WhatsApp-specific config
-
-```json5
-{
-  channels: {
-    whatsapp: {
-      dmPolicy: "pairing",
-      allowFrom: ["+15555550123", "+447700900456"],
-      textChunkLimit: 4000,        // Max chars per message chunk
-      chunkMode: "length",         // length | newline
-      mediaMaxMb: 50,              // Max media download size
-      sendReadReceipts: true,      // Blue ticks
-      groups: {
-        "*": { requireMention: true },
-      },
-    },
-  },
-}
-```
-
-### DM and group access (WhatsApp)
-
-WhatsApp sender IDs are **E.164 phone numbers**:
-
-```json5
-{
-  channels: {
-    whatsapp: {
-      dmPolicy: "allowlist",
-      allowFrom: ["+15555550123", "+447700900456"],
-      groupAllowFrom: ["+15551234567"],
-    },
-  },
-}
-```
-
-### Multi-account WhatsApp
-
-Run multiple WhatsApp numbers on the same Gateway:
-
-```json5
-{
-  channels: {
-    whatsapp: {
-      accounts: {
-        personal: {},   // Uses ~/.openclaw/credentials/whatsapp/personal/
-        biz: {},        // Uses ~/.openclaw/credentials/whatsapp/biz/
-      },
-    },
-  },
-}
-```
-
-Link each account separately:
+### Step 3: Start the Gateway
 
 ```bash
-openclaw channels login --channel whatsapp --account personal
-openclaw channels login --channel whatsapp --account biz
+openclaw gateway
 ```
 
-### WhatsApp quirks and gotchas
+The WhatsApp channel connects and maintains its own reconnect loop. If your internet drops, it reconnects automatically.
 
-| Issue | Details |
-|-------|---------|
-| **Session expiry** | WhatsApp Web sessions can expire (status 409-515). Relink with `openclaw channels logout && openclaw channels login` |
-| **No streaming** | WhatsApp doesn't support message editing, so responses appear as a single message |
-| **Rate limits** | Send too many messages too fast and WhatsApp may temporarily restrict your number |
-| **Multi-device** | Your phone must be online periodically to keep the linked session alive |
-| **Blue ticks** | `sendReadReceipts: true` sends read receipts (blue ticks). Set `false` if you don't want senders to know when messages are read |
-| **Group JIDs** | WhatsApp group IDs look like `120363403215116621@g.us` — not human-friendly |
+---
 
-### WhatsApp heartbeat
+## DM policies: pairing, allowlist, open
 
-OpenClaw can send periodic heartbeat messages to keep the WhatsApp connection alive:
+Both Telegram and WhatsApp share the same DM policy system:
+
+```mermaid
+flowchart LR
+    MSG[Incoming message] --> CHECK{DM Policy?}
+    CHECK -->|pairing| PAIR{Sender known?}
+    CHECK -->|allowlist| ALLOW{Sender in allowFrom?}
+    CHECK -->|open| PROCESS[Process message]
+    CHECK -->|disabled| DROP[Drop silently]
+
+    PAIR -->|yes| PROCESS
+    PAIR -->|no| CODE[Send pairing code\nDrop message]
+    ALLOW -->|yes| PROCESS
+    ALLOW -->|no| DROP2[Drop silently]
+```
+
+| Policy | Best for |
+|--------|---------|
+| `pairing` | Initial setup, unknown senders — they self-serve with a code |
+| `allowlist` | Locked-down setup, you know exactly who should have access |
+| `open` | Testing, bots with public access (requires `allowFrom: ["*"]`) |
+| `disabled` | You want inbound on this channel fully off |
+
+### Pairing flow (Telegram example)
+
+When an unknown sender DMs your bot in `pairing` mode:
+
+1. Bot sends them: `"Pairing code: ABC123 (expires in 1 hour)"`
+2. You run: `openclaw pairing approve telegram ABC123`
+3. Their Telegram user ID is added to the approved list
+4. Their next message processes normally
+
+---
+
+## Group policies and mention gating
+
+Groups have their own access layer on top of DM policies.
+
+### Telegram groups
 
 ```json5
 {
-  web: {
-    heartbeatSeconds: 60,
-  },
+  channels: {
+    telegram: {
+      botToken: "...",
+      groups: {
+        // Apply defaults to all groups
+        "*": {
+          requireMention: true  // only respond when @mentioned
+        },
+        // Override for one specific group
+        "-1001234567890": {
+          requireMention: false,  // respond to everything
+          groupPolicy: "open"
+        }
+      }
+    }
+  }
+}
+```
+
+> Privacy mode: Telegram bots have Privacy Mode enabled by default, which means they only see messages that @mention them. If you want `requireMention: false` to work, go to BotFather → `/setprivacy` → Disable, then remove and re-add the bot to your groups.
+
+Getting a group's chat ID:
+```bash
+# Watch logs and send a message in the group
+openclaw logs --follow
+# Look for chat.id in the output
+```
+
+### WhatsApp groups
+
+```json5
+{
+  channels: {
+    whatsapp: {
+      groupPolicy: "allowlist",
+      groupAllowFrom: ["+61412345678"],
+      groups: {
+        "*": { requireMention: true }
+      }
+    }
+  }
+}
+```
+
+WhatsApp mention detection covers:
+- Real @-mentions (when someone taps a contact)
+- Regex patterns (`agents.list[].groupChat.mentionPatterns`)
+- The bot's own E.164 number typed anywhere in the message
+
+```json5
+{
+  agents: {
+    list: [
+      {
+        id: "main",
+        groupChat: {
+          mentionPatterns: ["@?mybot", "\\+61412345678"]
+        }
+      }
+    ]
+  }
 }
 ```
 
 ---
 
-## Telegram vs WhatsApp: Side by Side
+## Platform comparison
+
+Telegram and WhatsApp are architecturally similar in OpenClaw, but they differ in ways that matter:
 
 | Feature | Telegram | WhatsApp |
-|---------|----------|----------|
-| **Setup** | Bot token (30 seconds) | QR scan + phone linking |
-| **Protocol** | Official Bot API | Reverse-engineered (Baileys) |
-| **Library** | grammY | Baileys |
-| **Message limit** | 4096 chars | ~4000 chars |
-| **Media upload** | 5MB (bot), 50MB (file) | 50MB |
-| **Streaming** | Yes (edit message) | No |
-| **Reactions** | Yes | Yes |
-| **Threads** | Forum topics | No |
-| **Custom commands** | Yes (BotFather menu) | No |
-| **Read receipts** | No | Yes (configurable) |
-| **Multi-account** | One bot per account | One phone per account |
-| **Reconnect** | Automatic (polling/webhook) | Automatic (with credential restore) |
-| **Session stability** | Very stable | Occasional expiry (409/515) |
-| **Sender ID format** | `tg:123456789` | `+15555550123` (E.164) |
+|---------|---------|---------|
+| Auth | Bot token (simple, no hardware) | QR scan (links a device session) |
+| Setup time | ~5 minutes | ~15 minutes |
+| Account type | Separate bot identity | Linked to a phone number |
+| Session persistence | Stateless (token is enough) | Session stored in `~/.openclaw/credentials/whatsapp/` |
+| Groups | ✅ Full support | ✅ Full support |
+| Media (inbound) | ✅ Download + process | ✅ Download + process |
+| Streaming preview | ✅ Edit-based streaming | ❌ Not supported |
+| Read receipts | ❌ Not supported | ✅ Enabled by default |
+| Reaction acks | ✅ | ✅ |
+| Polling method | Long poll or webhook | WebSocket (persistent) |
+| Number required | ❌ Bot is its own identity | ✅ Requires phone number |
 
-### When to use which
+### Which one first?
 
-- **Telegram** is better for: quick setup, group bots with slash commands, streaming responses, stable connections
-- **WhatsApp** is better for: reaching people who already use WhatsApp (most of the world), personal assistant feel, rich media
+Go with Telegram if you want something working in the next ten minutes and mainly care about your own workflow.
 
-Many users run **both** — Telegram for power-user interactions and WhatsApp for quick mobile messages. Since DMs collapse to the same session, context is shared between them.
+Go with WhatsApp if you need to reach people who already have it and won't install something new. That's most of the world.
 
----
-
-## Shared Configuration Patterns
-
-Both channels support the same core patterns:
-
-### Group mention gating
-
-```json5
-{
-  channels: {
-    telegram: {
-      groups: { "*": { requireMention: true } },
-    },
-    whatsapp: {
-      groups: { "*": { requireMention: true } },
-    },
-  },
-}
-```
-
-### History context for groups
-
-When the agent is @mentioned in a group, it can see recent messages for context:
-
-```json5
-{
-  channels: {
-    telegram: {
-      historyLimit: 50,  // Include up to 50 recent messages
-    },
-  },
-}
-```
-
-### Retry policy
-
-Both channels support configurable retry on send failures:
-
-```json5
-{
-  channels: {
-    telegram: {
-      retry: {
-        attempts: 3,
-        minDelayMs: 400,
-        maxDelayMs: 30000,
-        jitter: 0.1,
-      },
-    },
-  },
-}
-```
-
----
-
-## Troubleshooting
-
-### Telegram: bot not responding
-
-1. Check the token: `openclaw status --deep`
-2. Verify polling: look for `[telegram]` in Gateway logs
-3. Check allowlist: is the sender in `allowFrom` or paired?
-4. Try sending `/status` to the bot
-
-### WhatsApp: logged out
-
-```bash
-# Check connection status
-openclaw status --deep
-
-# If logged out, relink
-openclaw channels logout --channel whatsapp
-openclaw channels login --channel whatsapp --verbose
-```
-
-### WhatsApp: messages not arriving
-
-1. Confirm linked phone is online
-2. Check `allowFrom` list (uses E.164: `+15555550123`)
-3. For groups: check `groupAllowFrom` and mention patterns
-4. Look for `web-inbound` in the log files
-
-> **Key Takeaway:** Telegram and WhatsApp are complementary channels. Telegram gives you a clean bot API with streaming and custom commands. WhatsApp gives you reach — billions of users who already have the app. Run both, and your agent becomes truly omni-channel with shared conversation context.
+You don't have to choose — both can run simultaneously. The Gateway handles them in parallel.
 
 ---
 
 ## Exercises
 
-1. **Set up Telegram**: If you haven't already, create a bot via BotFather, add the token to your config, and send it a message. Time yourself — it should take under 5 minutes.
+1. Set up Telegram polling: create a bot, add the token, start the gateway, DM the bot, approve pairing. Send a message and get a response.
 
-2. **Configure groups**: Add your Telegram bot to a group. Configure `requireMention: true` and test that it only responds when @mentioned. Then try `requireMention: false` on a specific group and see the difference.
+2. Add your phone number to `channels.telegram.allowFrom` using the numeric ID you find in the logs (not your @username — always use numeric IDs).
 
-3. **Inspect WhatsApp credentials**: Look at `~/.openclaw/credentials/whatsapp/default/`. What files exist? Check `creds.json` modification time — is it recent?
+3. Challenge: Add the bot to a Telegram group. Set `requireMention: true` for that group. Verify the bot only responds when @mentioned.
+
+4. Challenge: If you have a spare phone number, try the WhatsApp QR link flow. Compare the experience.
 
 ---
 
-In the next lesson, we'll cover **Discord, Slack, and other channels** — each with their own personality and integration patterns.
+The next lesson covers Discord, Slack, and the other channels — including when to use each one.
