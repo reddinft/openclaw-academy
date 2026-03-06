@@ -6,15 +6,13 @@ WORKDIR /app
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy app
+# Copy app and course content
 COPY app/ ./app/
+COPY course/ ./course/
 
-# Data volume mount point (SQLite)
+# Data directory for SQLite (mounted as Fly volume in production)
 RUN mkdir -p /data
-
-# Course content is bind-mounted at runtime
-# (volume mount: ./course → /course)
 
 EXPOSE 8080
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080", "--reload"]
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
