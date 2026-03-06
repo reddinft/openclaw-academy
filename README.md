@@ -1,149 +1,170 @@
 # 🦞 OpenClaw Academy
 
-A self-hosted "Udemy-style" course platform for deep-diving into OpenClaw's architecture and codebase.
+A free, open-source course platform for learning [OpenClaw](https://github.com/openclaw/openclaw) — the self-hosted AI agent framework.
 
-**Single-user · Docker · Dark theme · Markdown-based content · Progress tracking · Quizzes**
+**10 modules · 33 lessons · Quizzes · Progress tracking · Dark theme · Runs in Docker**
 
-> **Disclaimer:** This is a community educational resource. It is not officially affiliated with or endorsed by the OpenClaw project.
+→ **Live demo:** https://openclaw-academy.fly.dev/  
+→ **Patches welcome** — see [Contributing](#contributing)
+
+> **Disclaimer:** Community educational resource. Not officially affiliated with the OpenClaw project.
 
 ---
 
-## Quick Start
+## Quick Start (Docker)
 
 ```bash
-# Clone the repo
 git clone https://github.com/reddinft/openclaw-academy.git
 cd openclaw-academy
-
-# Start with Docker Compose
 docker compose up -d
-
-# Open in browser
 open http://localhost:8080
 ```
+
+That's it. No database setup, no env vars, no build step.
 
 ## Development (without Docker)
 
 ```bash
-# Install Python dependencies (Python 3.11+ recommended)
+git clone https://github.com/reddinft/openclaw-academy.git
+cd openclaw-academy
+
 pip install -r requirements.txt
 
-# Run the dev server (hot-reload)
-COURSE_DIR=./course DATA_DIR=/tmp DB_PATH=/tmp/academy.db \
+COURSE_DIR=./course DB_PATH=/tmp/academy.db \
   python3 -m uvicorn app.main:app --reload --port 8080
 
-# Open in browser
 open http://localhost:8080
 ```
 
-## Static Export (for Vercel / GitHub Pages)
+Requires Python 3.11+.
 
-```bash
-# Export to dist/ directory
-python3 scripts/export_static.py
+---
 
-# Preview locally
-cd dist && python3 -m http.server 8090
-open http://localhost:8090
-```
+## Course Content
 
-## Course Structure
+| # | Module | Lessons | Status |
+|---|--------|---------|--------|
+| 1 | OpenClaw Overview | 3 | ✅ Complete |
+| 2 | Gateway Architecture | 4 | ✅ Complete |
+| 3 | Channel System | 3 | ✅ Complete |
+| 4 | Agent System | 4 | ✅ Complete |
+| 5 | Skills & Hooks | 3 | ✅ Complete |
+| 6 | Security Model | 3 | ✅ Complete |
+| 7 | Configuration Deep Dive | 4 | 🚧 Stub — help wanted |
+| 8 | Extending OpenClaw | 3 | 🚧 Stub — help wanted |
+| 9 | Deployment Patterns | 3 | ✅ Complete |
+| 10 | Case Study: Real-World Setup | 3 | 🚧 Stub — help wanted |
 
-| # | Module | Lessons |
-|---|--------|---------|
-| 1 | OpenClaw Overview | 3 |
-| 2 | Gateway Architecture | 4 |
-| 3 | Channel System | 3 |
-| 4 | Agent System | 4 |
-| 5 | Skills & Hooks | 3 |
-| 6 | Security Model | 3 |
-| 7 | Configuration Deep Dive | 4 |
-| 8 | Extending OpenClaw | 3 |
-| 9 | Deployment Patterns | 3 |
-| 10 | Case Study: Real-World Setup | 3 |
+Modules 7, 8, and 10 are stubs. **We'd love PRs filling these in.**
 
-**Total:** 33 lessons + 10 quizzes, ~6.5 hours of content
+---
+
+## Contributing
+
+PRs are very welcome — especially for:
+
+- **Filling in stub modules** (7, 8, 10) — see `course/module-07-config/`, `module-08-extending/`, `module-10-case-study/`
+- **Fixing factual errors** as OpenClaw evolves
+- **Adding "From the Trenches" sidebars** — real-world gotchas and incident stories
+- **New modules** — suggest via issue first
+- **Bug fixes** in the platform code
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for full guidelines.
+
+---
 
 ## Authoring Content
 
-Add/edit lessons in `course/module-XX-*/`:
-- `meta.yaml` — module metadata + lesson list
-- `NN-lesson-name.md` — lesson content (markdown)
-- `quiz.yaml` — quiz questions
+Content lives in `course/module-XX-name/`:
 
-Content changes take effect immediately (no restart needed in dev mode).
+```
+module-02-gateway/
+├── meta.yaml           ← title, description, lesson order
+├── 01-gateway-daemon.md
+├── 02-websocket-protocol.md
+└── quiz.yaml           ← questions + answers
+```
 
-See `course/module-01-overview/` for a complete example.
+See `course/module-01-overview/` as the reference example. Content changes take effect immediately in dev mode — no restart needed.
+
+---
 
 ## Tech Stack
 
-- **FastAPI** + **HTMX** + **Jinja2** — backend + reactive UI
-- **mistune** — markdown rendering
-- **highlight.js** — code syntax highlighting
-- **Mermaid.js** — architecture diagrams from fenced blocks
-- **aiosqlite** — progress tracking
-- **Docker + Compose** — containerised deployment
+| Layer | Choice |
+|-------|--------|
+| Backend | FastAPI + Python 3.12 |
+| Frontend | HTMX + Jinja2 (no JS bundle) |
+| Styling | Custom CSS, dark theme |
+| Code highlighting | highlight.js (CDN) |
+| Diagrams | Mermaid.js (CDN) |
+| Progress DB | SQLite via aiosqlite |
+| Analytics | GoatCounter + server-side middleware |
+| Deployment | Docker + Fly.io (Sydney) |
 
-## Files
+---
+
+## Self-Hosting on Fly.io
+
+```bash
+# Install flyctl
+curl -fsSL https://fly.io/install.sh | sh
+
+# Authenticate
+flyctl auth login
+
+# Create app + persistent volume
+flyctl apps create openclaw-academy --org personal
+flyctl volumes create academy_data --region syd --size 1 --app openclaw-academy --yes
+
+# Deploy
+flyctl deploy --remote-only
+```
+
+The included `fly.toml` targets Sydney (`syd`) and uses `auto_stop_machines = "stop"` so the app sleeps when idle — keeping it free tier friendly.
+
+---
+
+## Project Structure
 
 ```
 openclaw-academy/
 ├── LICENSE              ← MIT (code)
 ├── LICENSE-CONTENT      ← CC-BY-SA 4.0 (course content)
-├── NOTICES.md           ← Third-party attributions
-├── README.md            ← This file
+├── CONTRIBUTING.md      ← How to contribute
 ├── Dockerfile
 ├── docker-compose.yml
+├── fly.toml             ← Fly.io deployment config
 ├── requirements.txt
-├── scripts/
-│   └── export_static.py ← Static site generator
-├── vercel.json          ← Vercel deployment config
 ├── app/
-│   ├── main.py          ← FastAPI routes
-│   ├── database.py      ← SQLite helpers
+│   ├── main.py          ← FastAPI routes + /stats page
+│   ├── database.py      ← SQLite progress tracking
 │   ├── content.py       ← Markdown/YAML loader
+│   ├── analytics.py     ← Server-side hit logging + bot detection
 │   ├── templates/       ← Jinja2 HTML templates
 │   └── static/          ← CSS + JS
 └── course/
-    ├── outline.md       ← Full course outline
-    └── module-*/        ← Module content
+    ├── outline.md
+    └── module-*/
 ```
 
 ---
 
 ## License
 
-This project uses a **dual license**:
+**Dual licensed:**
 
-- **Code** (everything except `course/`): [MIT License](LICENSE)
-- **Course content** (`course/` directory): [Creative Commons Attribution-ShareAlike 4.0 International](LICENSE-CONTENT)
+- **Code** (`app/`, `Dockerfile`, etc.): [MIT License](LICENSE)
+- **Course content** (`course/`): [CC-BY-SA 4.0](LICENSE-CONTENT)
 
-You are free to:
-- Use, modify, and distribute the code under the MIT license
-- Share and adapt the course content, provided you give appropriate credit and distribute under the same CC-BY-SA 4.0 license
-
-See [NOTICES.md](NOTICES.md) for full third-party attributions.
+Content contributions are accepted under CC-BY-SA 4.0. By submitting a content PR, you agree your contribution will be licensed under those terms.
 
 ---
 
 ## Attribution
 
-This platform teaches [OpenClaw](https://github.com/openclaw/openclaw) — an open-source personal AI assistant framework. We are grateful to the OpenClaw project and its contributors.
-
-**OpenClaw** — Copyright 2025 Peter Steinberger — MIT License
-https://github.com/openclaw/openclaw
+This platform teaches [OpenClaw](https://github.com/openclaw/openclaw) by Peter Steinberger — MIT License.
 
 ---
 
-## Contributing
-
-PRs are welcome! Please note:
-
-- **Code contributions** are accepted under the MIT license
-- **Content contributions** (lessons, quizzes, course material) fall under **CC-BY-SA 4.0** — by submitting content, you agree your contribution will be licensed under CC-BY-SA 4.0
-- Open an issue first for major changes so we can discuss the approach
-- Keep lessons technically accurate and up to date with OpenClaw
-
----
-
-_A community educational resource for OpenClaw_
+*Built by [Redditech](https://reddi.tech) · Deployed by an AI agent · Sydney, Australia*
